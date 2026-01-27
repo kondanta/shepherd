@@ -21,7 +21,9 @@ opentelemetry-otlp = { version = "0.31.0", features = [
     "metrics",
     "tonic",
     "trace",
-] }
+    "logs",
+    "grpc-tonic",
+], optional = true }
 opentelemetry-semantic-conventions = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -46,6 +48,15 @@ tracing-subscriber = { version = "0.3.22", features = [
     "time",
     "tracing-log",
 ] }
+lazy_static = "1.5.0"
+arc-swap = "1.8.0"
+opentelemetry-stdout = "0.31.0"
+opentelemetry-appender-tracing = "0.31.1"
+
+[features]
+default = []
+
+otlp = ["opentelemetry-otlp"]
 
 [profile.release]
 opt-level = 3
