@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 #[cfg(feature = "otlp")]
 use opentelemetry_sdk;
 
+mod config;
 mod features;
 mod routes;
 mod tracing_setup;
