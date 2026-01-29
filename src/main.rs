@@ -1,13 +1,10 @@
 use axum::{Router, routing::get};
-use axum_server;
 use clap::{Parser, Subcommand};
-use std::net::SocketAddr;
-
-#[cfg(feature = "otlp")]
-use opentelemetry_sdk;
+use std::{net::SocketAddr, sync::Arc};
 
 mod config;
 mod features;
+mod fs;
 mod routes;
 mod tracing_setup;
 
@@ -48,14 +45,16 @@ async fn main() {
             // #[allow(unused_mut)]
             let mut app = Router::new()
                 .route("/", get(crate::routes::root()))
-                .route("/health", get(crate::routes::health_check));
+                .route("/health", get(crate::routes::health_check))
+                .route("/scan", get(crate::routes::scan_filesystem))
+                .with_state(shared_config.clone());
             app = add_feature_routes(app);
             axum_server::bind(addr).serve(app.into_make_service()).await
         }
     };
 
     if let Err(e) = res {
-        eprintln!("Server error: {}", e);
+        eprintln!("Server error: {e}");
         std::process::exit(1);
     }
 
