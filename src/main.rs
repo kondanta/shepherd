@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, sync::Arc};
 
 mod config;
+mod container;
 mod features;
 mod fs;
 mod routes;
