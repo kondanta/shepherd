@@ -48,6 +48,7 @@ async fn main() {
                 .route("/", get(crate::routes::root()))
                 .route("/health", get(crate::routes::health_check))
                 .route("/scan", get(crate::routes::scan_filesystem))
+                .route("/list-services", get(crate::routes::list_managed_services))
                 .with_state(shared_config.clone());
             app = add_feature_routes(app);
             axum_server::bind(addr).serve(app.into_make_service()).await

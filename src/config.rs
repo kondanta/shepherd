@@ -5,8 +5,12 @@ use std::env;
 pub struct Config {
     pub root_dir: String,
     pub log_level: String,
+    pub webhook_secret: String,
     #[cfg(feature = "otlp")]
     pub otlp_endpoint: String,
+
+    pub renovate_username: String,
+    pub renovate_email: String,
 }
 
 impl Config {
@@ -21,6 +25,21 @@ impl Config {
 
         let log_level = env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string());
 
+        let renovate_username = env::var("RENOVATE_USERNAME").unwrap_or_else(|_| {
+            eprintln!("RENOVATE_USERNAME not set, using default value");
+            "renovate".to_string()
+        });
+
+        let renovate_email = env::var("RENOVATE_EMAIL").unwrap_or_else(|_| {
+            eprintln!("RENOVATE_EMAIL not set, using default value");
+            "renovate".to_string()
+        });
+
+        let webhook_secret = env::var("WEBHOOK_SECRET").unwrap_or_else(|_| {
+            eprintln!("Error: WEBHOOK_SECRET environment variable must be set");
+            std::process::exit(1);
+        });
+
         #[cfg(feature = "otlp")]
         {
             let otlp_endpoint = env::var("OTLP_ENDPOINT").unwrap_or_else(|_| {
@@ -32,6 +51,9 @@ impl Config {
                 root_dir,
                 otlp_endpoint,
                 log_level,
+                renovate_username,
+                renovate_email,
+                webhook_secret,
             }
         }
 
@@ -40,6 +62,9 @@ impl Config {
             Config {
                 root_dir: root_dir.into(),
                 log_level,
+                renovate_username,
+                renovate_email,
+                webhook_secret,
             }
         }
     }

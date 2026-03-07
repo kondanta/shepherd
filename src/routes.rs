@@ -1,7 +1,12 @@
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::StatusCode,
+};
 use std::sync::Arc;
 // use axum_macros::debug_handler;
 
+use crate::container;
 use crate::{config::Config, fs as f};
 
 #[cfg(feature = "otlp")]
@@ -59,4 +64,35 @@ pub async fn scan_filesystem(
     };
 
     Json(response)
+}
+
+#[derive(serde::Serialize, Debug, Clone)]
+pub struct ManagedServicesResponse {
+    pub services: Vec<crate::fs::walk::ServiceEntry>,
+    pub total: usize,
+}
+
+pub async fn list_managed_services(
+    State(config): State<Arc<Config>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<ManagedServicesResponse>, StatusCode> {
+    let manager = container::DeploymentManager::new(std::path::PathBuf::from(
+        &config.root_dir,
+    ))
+    .map_err(|e| {
+        tracing::error!("Failed to initialize DeploymentManager: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let services = manager.get_managed_services().map_err(|e| {
+        tracing::error!("Failed to get managed services: {:?}", e);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let services_length = services.len();
+
+    Ok(Json(ManagedServicesResponse {
+        services,
+        total: services_length,
+    }))
 }

@@ -5,10 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-#[derive(serde::Serialize, Debug)]
+#[derive(serde::Serialize, Debug, Clone)]
 pub struct ServiceEntry {
     pub path: PathBuf,
-    pub service: String,
+    pub name: String,
     pub image: String,
 }
 
@@ -66,7 +66,7 @@ fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
         {
             entries.push(ServiceEntry {
                 path: path.to_path_buf(),
-                service: service_name.to_string(),
+                name: service_name.to_string(),
                 image: image.to_string(),
             });
         }
@@ -101,10 +101,10 @@ services:
         let results = scan_filesystem(dir.path()).unwrap();
         assert_eq!(results.len(), 2);
 
-        let web_service = results.iter().find(|s| s.service == "web").unwrap();
+        let web_service = results.iter().find(|s| s.name == "web").unwrap();
         assert_eq!(web_service.image, "nginx:latest");
 
-        let db_service = results.iter().find(|s| s.service == "db").unwrap();
+        let db_service = results.iter().find(|s| s.name == "db").unwrap();
         assert_eq!(db_service.image, "postgres:alpine");
 
         dir.close().unwrap();
@@ -168,10 +168,10 @@ services:
         let result = parse_yaml_file(&file_path).unwrap();
         assert_eq!(result.len(), 2);
 
-        let api_service = result.iter().find(|s| s.service == "api").unwrap();
+        let api_service = result.iter().find(|s| s.name == "api").unwrap();
         assert_eq!(api_service.image, "myapi:1.0");
 
-        let cache_service = result.iter().find(|s| s.service == "cache").unwrap();
+        let cache_service = result.iter().find(|s| s.name == "cache").unwrap();
         assert_eq!(cache_service.image, "redis:latest");
 
         dir.close().unwrap();

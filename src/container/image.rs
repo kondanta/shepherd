@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 use color_eyre::Result;
 use eyre::eyre;
 use std::fmt;
