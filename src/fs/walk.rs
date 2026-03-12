@@ -40,7 +40,11 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
     Ok(results)
 }
 
-// Parses a YAML file at the given path and extracts service entries.
+// Parses a single compose YAML file and extracts service entries.
+pub(crate) fn parse_compose_file(path: &Path) -> Result<Vec<ServiceEntry>> {
+    parse_yaml_file(path)
+}
+
 fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
     let content = fs::read_to_string(path)
         .wrap_err_with(|| format!("Rading file {path:?}"))?;

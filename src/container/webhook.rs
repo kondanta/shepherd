@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::env;
 
 /// GitHub push webhook payload (simplified)
 /// Full schema: https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
@@ -89,20 +88,10 @@ impl WebhookPayload {
     }
 
     /// Check if this looks like a Renovate commit
-    pub fn is_renovate_commit(&self) -> bool {
-        // People like me might have their own renovate bots with different names. So it should be configurable.
-        let renovate_name = env::var("RENOVATE_USERNAME").unwrap(); // Default to "renovate" if not set
-        let renovate_email = env::var("RENOVATE_EMAIL").unwrap(); // Default to "renovate" if not set
-
+    pub fn is_renovate_commit(&self, username: &str, email: &str) -> bool {
         self.commits.iter().any(|c| {
-            c.author
-                .name
-                .to_lowercase()
-                .contains(renovate_name.as_str())
-                || c.author
-                    .email
-                    .to_lowercase()
-                    .contains(renovate_email.as_str())
+            c.author.name.to_lowercase().contains(username)
+                || c.author.email.to_lowercase().contains(email)
         })
     }
 
@@ -128,11 +117,6 @@ mod tests {
 
     #[test]
     fn test_parse_webhook_payload() {
-        // App normally sets these env vars, but we need to set them here for the test to work
-        unsafe {
-            env::set_var("RENOVATE_USERNAME", "renovate");
-            env::set_var("RENOVATE_EMAIL", "renovate");
-        }
         let json = r#"{
             "ref": "refs/heads/main",
             "before": "abc123",
@@ -171,7 +155,7 @@ mod tests {
         assert_eq!(payload.repository.name, "my-app");
         assert_eq!(payload.branch_name(), Some("main"));
         assert!(payload.is_default_branch());
-        assert!(payload.is_renovate_commit());
+        assert!(payload.is_renovate_commit("renovate", "renovate"));
         assert!(payload.has_compose_changes());
     }
 

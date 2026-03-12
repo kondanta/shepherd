@@ -11,6 +11,7 @@ pub struct Config {
 
     pub renovate_username: String,
     pub renovate_email: String,
+    pub github_token: Option<String>,
 }
 
 impl Config {
@@ -40,6 +41,8 @@ impl Config {
             std::process::exit(1);
         });
 
+        let github_token = env::var("GITHUB_TOKEN").ok();
+
         #[cfg(feature = "otlp")]
         {
             let otlp_endpoint = env::var("OTLP_ENDPOINT").unwrap_or_else(|_| {
@@ -54,6 +57,7 @@ impl Config {
                 renovate_username,
                 renovate_email,
                 webhook_secret,
+                github_token,
             }
         }
 
@@ -65,6 +69,7 @@ impl Config {
                 renovate_username,
                 renovate_email,
                 webhook_secret,
+                github_token,
             }
         }
     }

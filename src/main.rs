@@ -1,4 +1,4 @@
-use axum::{Router, routing::get};
+use axum::{Router, routing::{get, post}};
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, sync::Arc};
 
@@ -8,6 +8,8 @@ mod features;
 mod fs;
 mod routes;
 mod tracing_setup;
+
+use routes::{AppState, make_orchestrator};
 
 #[derive(Parser)]
 struct Cli {
@@ -39,17 +41,25 @@ async fn main() {
     features::set_features(features.to_vec());
 
     let tracer_provider = tracing_setup::init_tracing(&shared_config);
+
     let res = match &cli.command {
         Commands::Serve => {
             tracing::info!("Starting shepherd server on {}:{}", cli.host, cli.port);
             let addr = SocketAddr::new(cli.host.parse().unwrap(), cli.port);
-            // #[allow(unused_mut)]
+            let orchestrator = make_orchestrator(&shared_config);
+            let state = AppState {
+                config: shared_config.clone(),
+                orchestrator,
+            };
             let mut app = Router::new()
                 .route("/", get(crate::routes::root()))
                 .route("/health", get(crate::routes::health_check))
                 .route("/scan", get(crate::routes::scan_filesystem))
                 .route("/list-services", get(crate::routes::list_managed_services))
-                .with_state(shared_config.clone());
+                .route("/webhook/github", post(crate::routes::github_webhook))
+                .route("/deployments", get(crate::routes::list_deployments))
+                .route("/deploy", post(crate::routes::manual_deploy))
+                .with_state(state);
             app = add_feature_routes(app);
             axum_server::bind(addr).serve(app.into_make_service()).await
         }
@@ -67,7 +77,7 @@ async fn main() {
     }
 }
 
-#[allow(unused_mut)] // as it is used in conditional compilation
+#[allow(unused_mut)]
 fn add_feature_routes(mut app: Router) -> Router {
     #[cfg(feature = "otlp")]
     {

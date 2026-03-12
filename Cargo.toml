@@ -61,6 +61,10 @@ walkdir = "2.5.0"
 serde_yaml = "0.9.34"
 dotenvy = "0.15.7"
 which = "8.0.1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 
 [dev-dependencies]
