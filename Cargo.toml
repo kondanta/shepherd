@@ -7,7 +7,7 @@ edition = "2024"
 [dependencies]
 axum = { version = "0.8.8", features = ["http2", "json", "macros"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
-clap = { version = "4.5.60", features = ["derive", "env"] }
+clap = { version = "4.6.0", features = ["derive", "env"] }
 eyre = "0.6.12"
 color-eyre = "0.6.5"
 serde = { version = "1.0.228", features = ["derive"] }
@@ -24,7 +24,7 @@ tracing = { version = "0.1.44", features = [
     "attributes",
     "release_max_level_info",
 ] }
-tracing-subscriber = { version = "0.3.22", features = [
+tracing-subscriber = { version = "0.3.23", features = [
     "env-filter",
     "fmt",
     "json",
@@ -36,7 +36,7 @@ arc-swap = "1.8.2"
 walkdir = "2.5.0"
 serde_yaml = "0.9.34"
 dotenvy = "0.15.7"
-which = "8.0.1"
+which = "8.0.2"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
