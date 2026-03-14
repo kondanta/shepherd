@@ -1,9 +1,8 @@
-#[allow(dead_code)]
 use color_eyre::Result;
 use eyre::eyre;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageReference {
     // Full image reference, e.g. "docker.io/library/ubuntu:latest", "ghcr.io/myorg/myimage:1.0.0", "quay.io/coreos/tectonic-console:v2.9.0-tectonic.1"
     pub repository: String,
@@ -15,16 +14,12 @@ pub struct ImageReference {
     pub digest: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageTag(String);
 
 impl ImageTag {
     pub fn new(tag: impl Into<String>) -> Self {
         Self(tag.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 
     pub fn is_latest(&self) -> bool {
@@ -33,11 +28,11 @@ impl ImageTag {
 
     pub fn is_semver(&self) -> bool {
         // A simple heuristic to check if the tag looks like a version, e.g. "v1.2.3", "1.0.0"
-        self.0.starts_with('v')
+        (self.0.starts_with('v')
             && self.0[1..]
                 .chars()
                 .next()
-                .is_some_and(|c| c.is_ascii_digit())
+                .is_some_and(|c| c.is_ascii_digit()))
             || self.0.chars().next().is_some_and(|c| c.is_ascii_digit())
     }
 }
@@ -81,31 +76,6 @@ impl ImageReference {
             digest,
         })
     }
-
-    pub fn registry(&self) -> Option<&str> {
-        if self.repository.contains('/') && !self.repository.starts_with("library/")
-        {
-            self.repository.split('/').next()
-        } else {
-            None
-        }
-    }
-
-    pub fn name(&self) -> &str {
-        self.repository
-            .rsplit('/')
-            .next()
-            .unwrap_or(&self.repository)
-    }
-
-    pub fn to_string_with_digest(&self) -> String {
-        let base = format!("{}:{}", self.repository, self.tag);
-        if let Some(digest) = &self.digest {
-            format!("{}@{}", base, digest)
-        } else {
-            base
-        }
-    }
 }
 
 impl fmt::Display for ImageReference {
@@ -122,7 +92,7 @@ mod tests {
     fn test_parse_simple() {
         let img = ImageReference::parse("nginx").unwrap();
         assert_eq!(img.repository, "nginx");
-        assert_eq!(img.tag.as_str(), "latest");
+        assert_eq!(img.tag.to_string(), "latest");
         assert_eq!(img.digest, None);
     }
 
@@ -130,15 +100,14 @@ mod tests {
     fn test_parse_with_tag() {
         let img = ImageReference::parse("nginx:1.25").unwrap();
         assert_eq!(img.repository, "nginx");
-        assert_eq!(img.tag.as_str(), "1.25");
+        assert_eq!(img.tag.to_string(), "1.25");
     }
 
     #[test]
     fn test_parse_with_registry() {
         let img = ImageReference::parse("docker.io/library/nginx:alpine").unwrap();
         assert_eq!(img.repository, "docker.io/library/nginx");
-        assert_eq!(img.tag.as_str(), "alpine");
-        assert_eq!(img.registry(), Some("docker.io"));
+        assert_eq!(img.tag.to_string(), "alpine");
     }
 
     #[test]
@@ -152,7 +121,7 @@ mod tests {
     fn test_parse_registry_with_port() {
         let img = ImageReference::parse("localhost:5000/myapp:v1").unwrap();
         assert_eq!(img.repository, "localhost:5000/myapp");
-        assert_eq!(img.tag.as_str(), "v1");
+        assert_eq!(img.tag.to_string(), "v1");
     }
 
     #[test]

@@ -1,70 +1,66 @@
-use serde::{Deserialize, Serialize};
-use std::env;
+use serde::Deserialize;
+use std::collections::HashSet;
 
 /// GitHub push webhook payload (simplified)
 /// Full schema: https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WebhookPayload {
     #[serde(rename = "ref")]
     pub git_ref: String, // e.g., "refs/heads/main"
 
-    pub before: String, // SHA before push
-    pub after: String,  // SHA after push (head commit)
+    pub after: String, // SHA after push (head commit)
 
     pub repository: Repository,
-    pub pusher: Pusher,
 
     #[serde(default)]
     pub commits: Vec<Commit>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Repository {
-    pub id: u64,
-    pub name: String,
     pub full_name: String, // e.g., "username/repo"
-
-    #[serde(rename = "clone_url")]
-    pub clone_url: String,
-
-    #[serde(rename = "ssh_url")]
-    pub ssh_url: String,
 
     #[serde(rename = "default_branch")]
     pub default_branch: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Pusher {
-    pub name: String,
-    pub email: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Commit {
-    pub id: String, // SHA
-    pub message: String,
-    pub timestamp: String,
     pub author: Author,
 
     #[serde(default)]
     pub added: Vec<String>,
 
     #[serde(default)]
-    pub removed: Vec<String>,
-
-    #[serde(default)]
     pub modified: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Author {
     pub name: String,
     pub email: String,
     pub username: Option<String>,
 }
 
-/// Event type from X-GitHub-Event header
+impl Repository {
+    /// The owner part of `full_name` (e.g. "acme" from "acme/my-app").
+    pub fn owner(&self) -> &str {
+        self.full_name
+            .split_once('/')
+            .map(|(o, _)| o)
+            .unwrap_or(&self.full_name)
+    }
+
+    /// The repo part of `full_name` (e.g. "my-app" from "acme/my-app").
+    pub fn repo_name(&self) -> &str {
+        self.full_name
+            .split_once('/')
+            .map(|(_, r)| r)
+            .unwrap_or(&self.full_name)
+    }
+}
+
+/// Event type from X-GitHub-Event header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebhookEvent {
     Push,
@@ -83,42 +79,33 @@ impl WebhookEvent {
 }
 
 impl WebhookPayload {
-    /// Check if this push is to the default branch (usually main/master)
+    /// Check if this push is to the default branch (usually main/master).
     pub fn is_default_branch(&self) -> bool {
         self.git_ref == format!("refs/heads/{}", self.repository.default_branch)
     }
 
-    /// Check if this looks like a Renovate commit
-    pub fn is_renovate_commit(&self) -> bool {
-        // People like me might have their own renovate bots with different names. So it should be configurable.
-        let renovate_name = env::var("RENOVATE_USERNAME").unwrap(); // Default to "renovate" if not set
-        let renovate_email = env::var("RENOVATE_EMAIL").unwrap(); // Default to "renovate" if not set
-
+    /// Check if this looks like a Renovate commit.
+    /// Prefers exact match on the GitHub `username` field; falls back to
+    /// case-insensitive name equality and email substring for self-hosted
+    /// Renovate variants where the username field may differ.
+    pub fn is_renovate_commit(&self, username: &str, email: &str) -> bool {
         self.commits.iter().any(|c| {
-            c.author
-                .name
-                .to_lowercase()
-                .contains(renovate_name.as_str())
-                || c.author
-                    .email
-                    .to_lowercase()
-                    .contains(renovate_email.as_str())
+            c.author.username.as_deref() == Some(username)
+                || c.author.name.eq_ignore_ascii_case(username)
+                || c.author.email.to_lowercase().contains(email)
         })
     }
 
-    /// Get the branch name (without "refs/heads/" prefix)
-    pub fn branch_name(&self) -> Option<&str> {
-        self.git_ref.strip_prefix("refs/heads/")
-    }
-
-    /// Check if any docker-compose files were modified
-    pub fn has_compose_changes(&self) -> bool {
-        self.commits.iter().any(|c| {
-            c.modified
-                .iter()
-                .chain(c.added.iter())
-                .any(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
-        })
+    /// Returns all compose files (*.yaml / *.yml) touched across all commits.
+    /// Duplicate delivery of the same webhook is safe: the second pass will
+    /// find no config diff after the first already wrote and deployed.
+    pub fn modified_compose_files(&self) -> HashSet<String> {
+        self.commits
+            .iter()
+            .flat_map(|c| c.modified.iter().chain(c.added.iter()))
+            .filter(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
+            .cloned()
+            .collect()
     }
 }
 
@@ -128,11 +115,6 @@ mod tests {
 
     #[test]
     fn test_parse_webhook_payload() {
-        // App normally sets these env vars, but we need to set them here for the test to work
-        unsafe {
-            env::set_var("RENOVATE_USERNAME", "renovate");
-            env::set_var("RENOVATE_EMAIL", "renovate");
-        }
         let json = r#"{
             "ref": "refs/heads/main",
             "before": "abc123",
@@ -168,11 +150,10 @@ mod tests {
 
         let payload: WebhookPayload = serde_json::from_str(json).unwrap();
 
-        assert_eq!(payload.repository.name, "my-app");
-        assert_eq!(payload.branch_name(), Some("main"));
+        assert_eq!(payload.repository.full_name, "user/my-app");
         assert!(payload.is_default_branch());
-        assert!(payload.is_renovate_commit());
-        assert!(payload.has_compose_changes());
+        assert!(payload.is_renovate_commit("renovate", "renovate"));
+        assert!(!payload.modified_compose_files().is_empty());
     }
 
     #[test]

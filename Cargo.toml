@@ -6,45 +6,24 @@ edition = "2024"
 
 [dependencies]
 axum = { version = "0.8.8", features = ["http2", "json", "macros"] }
-axum-extra = { version = "0.12.5", features = ["typed-header"] }
-axum-macros = "0.5.0"
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
-axum-prometheus = "0.10.0"
-axum-tracing-opentelemetry = "0.33.0"
 clap = { version = "4.5.60", features = ["derive", "env"] }
 eyre = "0.6.12"
 color-eyre = "0.6.5"
-env_logger = "0.11.9"
-envy = "0.4.2"
-opentelemetry = { version = "0.31.0", features = ["metrics", "trace"] }
-opentelemetry-otlp = { version = "0.31.0", features = [
-    "metrics",
-    "tonic",
-    "trace",
-    "logs",
-    "grpc-tonic",
-], optional = true }
-opentelemetry-semantic-conventions = "0.31.0"
-opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.50", features = [
+    "fs",
     "macros",
     "process",
     "rt-multi-thread",
+    "signal",
     "time",
 ] }
-tokio-macros = "2.6.1"
-tower = "0.5.3"
 tracing = { version = "0.1.44", features = [
     "attributes",
     "release_max_level_info",
 ] }
-tracing-core = "0.1.36"
-tracing-futures = "0.2.5"
-tracing-log = "0.2.0"
-tracing-opentelemetry = "0.32.1"
-tracing-serde = "0.2.0"
 tracing-subscriber = { version = "0.3.22", features = [
     "env-filter",
     "fmt",
@@ -53,14 +32,37 @@ tracing-subscriber = { version = "0.3.22", features = [
     "time",
     "tracing-log",
 ] }
-lazy_static = "1.5.0"
 arc-swap = "1.8.2"
-opentelemetry-stdout = "0.31.0"
-opentelemetry-appender-tracing = "0.31.1"
 walkdir = "2.5.0"
 serde_yaml = "0.9.34"
 dotenvy = "0.15.7"
 which = "8.0.1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+subtle = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# metrics facade is always present; without a recorder installed all calls are no-ops.
+metrics = "0.24"
+
+# opentelemetry_sdk is unconditional because SdkTracerProvider appears in the
+# return type of init_tracing (which main.rs calls unconditionally for flush).
+# Only the exporter and instrumentation crates are gated behind `otlp`.
+opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "trace"] }
+
+# Optional — only compiled when the `otlp` feature is enabled.
+opentelemetry = { version = "0.31.0", features = ["metrics", "trace"], optional = true }
+opentelemetry-otlp = { version = "0.31.0", features = [
+    "metrics",
+    "tonic",
+    "trace",
+    "logs",
+    "grpc-tonic",
+], optional = true }
+opentelemetry-semantic-conventions = { version = "0.31.0", optional = true }
+tracing-opentelemetry = { version = "0.32.1", optional = true }
+axum-prometheus = { version = "0.10.0", optional = true }
+axum-tracing-opentelemetry = { version = "0.33.0", optional = true }
 
 
 [dev-dependencies]
@@ -69,7 +71,17 @@ tempfile = "=3.27.0"
 [features]
 default = []
 
-otlp = ["opentelemetry-otlp"]
+# Expose /metrics for Prometheus scraping. Lightweight: only axum-prometheus.
+metrics = ["axum-prometheus"]
+
+# Push traces to an OTel collector via OTLP/gRPC. Pulls in tonic + gRPC stack.
+otlp = [
+    "opentelemetry",
+    "opentelemetry-otlp",
+    "opentelemetry-semantic-conventions",
+    "tracing-opentelemetry",
+    "axum-tracing-opentelemetry",
+]
 
 [profile.release]
 opt-level = 3

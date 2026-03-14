@@ -10,16 +10,18 @@ pub struct ServiceEntry {
     pub path: PathBuf,
     pub name: String,
     pub image: String,
+    /// Full service config used for change detection; excluded from API output.
+    #[serde(skip)]
+    pub raw_config: Value,
 }
 
-// Scans the filesystem starting from `root` and returns a list of ServiceEntry found in YAML files.
-// It looks for files with .yaml or .yml extensions and parses them to extract service information.
-// We do not care about Dockerfiles here.
+/// Scans the filesystem starting from `root` and returns all services found
+/// in YAML compose files. Non-compose YAML files are silently skipped.
 pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
     let mut results = Vec::new();
     for entry in WalkDir::new(root)
         .follow_links(true)
-        .max_depth(10) // Limit depth to avoid excessive recursion
+        .max_depth(10)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -33,19 +35,26 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
             .unwrap_or(false)
         {
             tracing::debug!("Parsing YAML file: {:?}", path);
-            results.extend(parse_yaml_file(path)?);
+            match parse_yaml_file(path) {
+                Ok(entries) => results.extend(entries),
+                Err(e) => tracing::debug!("Skipping {path:?}: {e}"),
+            }
         }
     }
 
     Ok(results)
 }
 
-// Parses a YAML file at the given path and extracts service entries.
-fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
+pub(crate) fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
     let content = fs::read_to_string(path)
-        .wrap_err_with(|| format!("Rading file {path:?}"))?;
+        .wrap_err_with(|| format!("Reading file {path:?}"))?;
+    parse_yaml_str(&content, path)
+}
 
-    let yaml: Value = serde_yaml::from_str(&content)
+/// Parse compose services from an in-memory string. `path` is used only for
+/// error messages and as the `ServiceEntry.path` value.
+pub(crate) fn parse_yaml_str(content: &str, path: &Path) -> Result<Vec<ServiceEntry>> {
+    let yaml: Value = serde_yaml::from_str(content)
         .wrap_err_with(|| format!("Parsing YAML file {path:?}"))?;
 
     let svcs = yaml
@@ -68,6 +77,7 @@ fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
                 path: path.to_path_buf(),
                 name: service_name.to_string(),
                 image: image.to_string(),
+                raw_config: svc.clone(),
             });
         }
     }

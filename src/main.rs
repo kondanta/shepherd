@@ -1,4 +1,4 @@
-use axum::{Router, routing::get};
+use axum_server::Handle;
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, sync::Arc};
 
@@ -6,8 +6,12 @@ mod config;
 mod container;
 mod features;
 mod fs;
+mod metrics;
 mod routes;
 mod tracing_setup;
+
+use container::DeploymentOrchestrator;
+use routes::AppState;
 
 #[derive(Parser)]
 struct Cli {
@@ -29,49 +33,97 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     color_eyre::install().expect("Failed to install color_eyre");
+
     let cli = Cli::parse();
-    let config = config::Config::load();
-    let shared_config = Arc::new(config);
-    let features = &[
-        #[cfg(feature = "otlp")]
-        "otlp",
-    ][..];
-    features::set_features(features.to_vec());
 
-    let tracer_provider = tracing_setup::init_tracing(&shared_config);
-    let res = match &cli.command {
-        Commands::Serve => {
-            tracing::info!("Starting shepherd server on {}:{}", cli.host, cli.port);
-            let addr = SocketAddr::new(cli.host.parse().unwrap(), cli.port);
-            // #[allow(unused_mut)]
-            let mut app = Router::new()
-                .route("/", get(crate::routes::root()))
-                .route("/health", get(crate::routes::health_check))
-                .route("/scan", get(crate::routes::scan_filesystem))
-                .route("/list-services", get(crate::routes::list_managed_services))
-                .with_state(shared_config.clone());
-            app = add_feature_routes(app);
-            axum_server::bind(addr).serve(app.into_make_service()).await
-        }
-    };
-
-    if let Err(e) = res {
-        eprintln!("Server error: {e}");
+    let config = config::Config::load().unwrap_or_else(|e| {
+        eprintln!("Configuration error: {e}");
         std::process::exit(1);
-    }
+    });
+    let config = Arc::new(config);
 
-    if let Some(provider) = tracer_provider {
-        provider
-            .shutdown()
-            .expect("Failed to shutdown tracer provider");
+    let tracer_provider = tracing_setup::init_tracing(&config);
+
+    match cli.command {
+        Commands::Serve => serve(cli.host, cli.port, config, tracer_provider).await,
     }
 }
 
-#[allow(unused_mut)] // as it is used in conditional compilation
-fn add_feature_routes(mut app: Router) -> Router {
-    #[cfg(feature = "otlp")]
+async fn serve(
+    host: String,
+    port: u16,
+    config: Arc<config::Config>,
+    tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+) {
+    let host: std::net::IpAddr = host.parse().unwrap_or_else(|_| {
+        eprintln!("Invalid host address: '{host}'");
+        std::process::exit(1);
+    });
+    let addr = SocketAddr::new(host, port);
+
+    let flags = features::new_flags();
+
+    let orchestrator =
+        DeploymentOrchestrator::new(&config, flags.clone())
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to initialize orchestrator: {e}");
+                std::process::exit(1);
+            });
+
+    let state = AppState {
+        config,
+        orchestrator: Arc::new(orchestrator),
+        flags,
+    };
+
+    tracing::info!("Starting shepherd on {addr}");
+
+    let app = routes::router(state);
+    let handle: Handle<SocketAddr> = Handle::new();
+    tokio::spawn(shutdown_signal(handle.clone()));
+
+    let result = axum_server::bind(addr)
+        .handle(handle)
+        .serve(app.into_make_service())
+        .await;
+
+    // Flush telemetry regardless of how the server exits.
+    if let Some(provider) = tracer_provider
+        && let Err(e) = provider.shutdown()
     {
-        app = app.route("/metrics", axum::routing::get(routes::metrics));
+        tracing::warn!("Failed to shutdown tracer provider: {e}");
     }
-    app
+
+    if let Err(e) = result {
+        tracing::error!("Server error: {e}");
+        std::process::exit(1);
+    }
+}
+
+async fn shutdown_signal(handle: Handle<SocketAddr>) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("Shutdown signal received, starting graceful shutdown");
+    handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
 }

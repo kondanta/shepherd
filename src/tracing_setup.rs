@@ -1,5 +1,6 @@
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_subscriber::{filter::EnvFilter, prelude::*};
+
 #[cfg(feature = "otlp")]
 mod otlp_imports {
     pub use opentelemetry::trace::TracerProvider as _;
@@ -24,18 +25,28 @@ fn get_resource() -> Resource {
 
 #[cfg(feature = "otlp")]
 pub fn init_tracing(config: &Config) -> Option<SdkTracerProvider> {
-    let exporter = SpanExporter::builder()
-        .with_tonic() // Use gRPC protocol. Use .with_http() for HTTP/protobuf or .with_http_json() for HTTP/JSON
+    let exporter = match SpanExporter::builder()
+        .with_tonic()
         .with_endpoint(&config.otlp_endpoint)
         .build()
-        .expect("Failed to create OTLP trace exporter");
+    {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!(
+                "Warning: failed to create OTLP trace exporter ({e}); \
+                 falling back to stderr logging"
+            );
+            init_stderr_logging(&config.log_level);
+            return None;
+        }
+    };
+
     let provider = SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
         .with_resource(get_resource())
         .build();
 
     let tracer = provider.tracer("shepherd-tracer");
-
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
@@ -49,7 +60,6 @@ pub fn init_tracing(config: &Config) -> Option<SdkTracerProvider> {
         .try_init()
         .expect("Failed to initialize tracing subscriber");
 
-    // Make OTEL aware of this provider (optional but recommended)
     opentelemetry::global::set_tracer_provider(provider.clone());
 
     Some(provider)
@@ -57,21 +67,24 @@ pub fn init_tracing(config: &Config) -> Option<SdkTracerProvider> {
 
 #[cfg(not(feature = "otlp"))]
 pub fn init_tracing(config: &Config) -> Option<SdkTracerProvider> {
-    tracing_subscriber::registry()
-        .with(set_env_filter(&config.log_level))
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
-        .init();
-
+    init_stderr_logging(&config.log_level);
     None
 }
 
-fn set_env_filter(log_level: &str) -> EnvFilter {
-    let base = EnvFilter::new(format!(
-        "shepherd={log_level},tower_http={log_level},axum_server={log_level}",
-    ));
+fn init_stderr_logging(log_level: &str) {
+    tracing_subscriber::registry()
+        .with(set_env_filter(log_level))
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .init();
+}
 
-    // Disable noisy logs from dependencies
-    base.add_directive("hyper=off".parse().unwrap())
+fn set_env_filter(log_level: &str) -> EnvFilter {
+    // Shepherd's own log level is controlled by LOG_LEVEL.
+    // Framework crates are capped at `info` so debug/trace doesn't flood logs.
+    EnvFilter::new(format!("shepherd={log_level}"))
+        .add_directive("tower_http=info".parse().unwrap())
+        .add_directive("axum_server=info".parse().unwrap())
+        .add_directive("hyper=off".parse().unwrap())
         .add_directive("tonic=off".parse().unwrap())
         .add_directive("h2=off".parse().unwrap())
         .add_directive("reqwest=off".parse().unwrap())
