@@ -1,0 +1,18 @@
+# Used by the GitHub Actions release workflow to produce the multi-arch
+# Docker image without recompiling Rust. The binaries are built natively
+# on each platform in the build-binary job and injected here.
+#
+# For local development use `Dockerfile` instead — it compiles from source.
+
+FROM docker:cli
+
+# TARGETARCH is set automatically by docker buildx to "amd64" or "arm64".
+ARG TARGETARCH
+
+COPY shepherd-linux-${TARGETARCH} /usr/local/bin/shepherd
+RUN chmod +x /usr/local/bin/shepherd
+
+EXPOSE 8080
+
+ENTRYPOINT ["shepherd"]
+CMD ["serve"]
