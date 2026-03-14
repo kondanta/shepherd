@@ -68,10 +68,8 @@ impl GitHubClient {
             request = request.header("Authorization", format!("token {}", token));
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| (color_eyre::Report::from(e), true))?; // network error → retry
+        let response =
+            request.send().await.map_err(|e| (color_eyre::Report::from(e), true))?; // network error → retry
 
         let status = response.status();
 
@@ -93,9 +91,6 @@ impl GitHubClient {
             ));
         }
 
-        response
-            .text()
-            .await
-            .map_err(|e| (color_eyre::Report::from(e), true))
+        response.text().await.map_err(|e| (color_eyre::Report::from(e), true))
     }
 }

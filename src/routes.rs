@@ -41,10 +41,7 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/flags/resume", post(resume_deployments))
         .route("/flags/dry-run/enable", post(enable_dry_run))
         .route("/flags/dry-run/disable", post(disable_dry_run))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_api_token,
-        ));
+        .layer(middleware::from_fn_with_state(state.clone(), require_api_token));
 
     #[cfg(feature = "metrics")]
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
@@ -64,11 +61,8 @@ pub fn router(state: AppState) -> axum::Router {
 
     #[cfg(feature = "metrics")]
     let app = {
-        app.route(
-            "/metrics",
-            get(move || async move { metric_handle.render() }),
-        )
-        .layer(prometheus_layer)
+        app.route("/metrics", get(move || async move { metric_handle.render() }))
+            .layer(prometheus_layer)
     };
 
     app.with_state(state)
@@ -165,22 +159,15 @@ pub(crate) async fn health_check(
 ) -> (StatusCode, Json<HealthResponse>) {
     let root_dir = &state.config.root_dir;
     match tokio::fs::metadata(root_dir).await {
-        Ok(m) if m.is_dir() => (
-            StatusCode::OK,
-            Json(HealthResponse {
-                status: "ok",
-                reason: None,
-            }),
-        ),
+        Ok(m) if m.is_dir() => {
+            (StatusCode::OK, Json(HealthResponse { status: "ok", reason: None }))
+        }
         _ => {
             let reason = format!("ROOT_DIR {root_dir:?} is not accessible");
             tracing::error!("Liveness check failed: {reason}");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(HealthResponse {
-                    status: "error",
-                    reason: Some(reason),
-                }),
+                Json(HealthResponse { status: "error", reason: Some(reason) }),
             )
         }
     }
@@ -196,9 +183,7 @@ pub(crate) async fn readiness_check(
 ) -> (StatusCode, Json<ReadyResponse>) {
     let (root_dir_result, docker_result) = tokio::join!(
         tokio::fs::metadata(&state.config.root_dir),
-        tokio::process::Command::new("docker")
-            .args(["compose", "version"])
-            .output(),
+        tokio::process::Command::new("docker").args(["compose", "version"]).output(),
     );
 
     let root_dir_ok = root_dir_result.map(|m| m.is_dir()).unwrap_or(false);
@@ -209,11 +194,8 @@ pub(crate) async fn readiness_check(
         tracing::warn!(root_dir_ok, docker_ok, "Readiness check failed");
     }
 
-    let status_code = if all_ok {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
+    let status_code =
+        if all_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
 
     (
         status_code,
@@ -266,17 +248,15 @@ pub async fn github_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
-    let signature = match headers
-        .get("X-Hub-Signature-256")
-        .and_then(|v| v.to_str().ok())
-    {
-        Some(s) => s.to_owned(),
-        None => {
-            tracing::warn!("Missing X-Hub-Signature-256 header");
-            crate::metrics::webhook_received("signature_missing");
-            return StatusCode::UNAUTHORIZED;
-        }
-    };
+    let signature =
+        match headers.get("X-Hub-Signature-256").and_then(|v| v.to_str().ok()) {
+            Some(s) => s.to_owned(),
+            None => {
+                tracing::warn!("Missing X-Hub-Signature-256 header");
+                crate::metrics::webhook_received("signature_missing");
+                return StatusCode::UNAUTHORIZED;
+            }
+        };
 
     if !verify_github_signature(&state.config.webhook_secret, &body, &signature) {
         tracing::warn!("Invalid webhook signature");
@@ -409,20 +389,18 @@ pub async fn resume_deployments(State(state): State<AppState>) -> StatusCode {
 }
 
 pub async fn enable_dry_run(State(state): State<AppState>) -> StatusCode {
-    state.flags.rcu(|f| crate::features::RuntimeFlags {
-        dry_run: true,
-        ..(**f).clone()
-    });
+    state
+        .flags
+        .rcu(|f| crate::features::RuntimeFlags { dry_run: true, ..(**f).clone() });
     crate::metrics::set_dry_run(true);
     tracing::info!("Dry-run mode enabled");
     StatusCode::OK
 }
 
 pub async fn disable_dry_run(State(state): State<AppState>) -> StatusCode {
-    state.flags.rcu(|f| crate::features::RuntimeFlags {
-        dry_run: false,
-        ..(**f).clone()
-    });
+    state
+        .flags
+        .rcu(|f| crate::features::RuntimeFlags { dry_run: false, ..(**f).clone() });
     crate::metrics::set_dry_run(false);
     tracing::info!("Dry-run mode disabled");
     StatusCode::OK

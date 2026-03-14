@@ -4,13 +4,13 @@ use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageReference {
-    // Full image reference, e.g. "docker.io/library/ubuntu:latest", "ghcr.io/myorg/myimage:1.0.0", "quay.io/coreos/tectonic-console:v2.9.0-tectonic.1"
+    /// Full image reference, e.g. `ghcr.io/myorg/myimage:1.0.0`
     pub repository: String,
 
-    // Image tag, e.g. "latest", "1.0.0", "v2.9.0-tectonic.1"
+    /// Image tag, e.g. `latest`, `1.0.0`, `v2.9.0-tectonic.1`
     pub tag: ImageTag,
 
-    // Optional digest for content-addressable image references, e.g. "sha256:abc123..."
+    /// Optional digest for content-addressable image references, e.g. `sha256:abc123…`
     pub digest: Option<String>,
 }
 
@@ -29,10 +29,7 @@ impl ImageTag {
     pub fn is_semver(&self) -> bool {
         // A simple heuristic to check if the tag looks like a version, e.g. "v1.2.3", "1.0.0"
         (self.0.starts_with('v')
-            && self.0[1..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_digit()))
+            && self.0[1..].chars().next().is_some_and(|c| c.is_ascii_digit()))
             || self.0.chars().next().is_some_and(|c| c.is_ascii_digit())
     }
 }
@@ -44,7 +41,7 @@ impl fmt::Display for ImageTag {
 }
 
 impl ImageReference {
-    // Parses an image reference string into an ImageReference struct.
+    /// Parses an image reference string into an `ImageReference`.
     pub fn parse(image: &str) -> Result<Self> {
         let (image_part, digest) = if let Some(pos) = image.find('@') {
             let (img, digest) = image.split_at(pos);
@@ -70,11 +67,7 @@ impl ImageReference {
             return Err(eyre!("Invalid image reference: repository is empty"));
         }
 
-        Ok(Self {
-            repository,
-            tag,
-            digest,
-        })
+        Ok(Self { repository, tag, digest })
     }
 }
 

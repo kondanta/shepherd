@@ -45,18 +45,12 @@ pub struct Author {
 impl Repository {
     /// The owner part of `full_name` (e.g. "acme" from "acme/my-app").
     pub fn owner(&self) -> &str {
-        self.full_name
-            .split_once('/')
-            .map(|(o, _)| o)
-            .unwrap_or(&self.full_name)
+        self.full_name.split_once('/').map(|(o, _)| o).unwrap_or(&self.full_name)
     }
 
     /// The repo part of `full_name` (e.g. "my-app" from "acme/my-app").
     pub fn repo_name(&self) -> &str {
-        self.full_name
-            .split_once('/')
-            .map(|(_, r)| r)
-            .unwrap_or(&self.full_name)
+        self.full_name.split_once('/').map(|(_, r)| r).unwrap_or(&self.full_name)
     }
 }
 

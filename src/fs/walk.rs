@@ -29,11 +29,7 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
 
         tracing::debug!("Visiting path: {:?}", path);
 
-        if path
-            .extension()
-            .map(|e| e == "yaml" || e == "yml")
-            .unwrap_or(false)
-        {
+        if path.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
             tracing::debug!("Parsing YAML file: {:?}", path);
             match parse_yaml_file(path) {
                 Ok(entries) => results.extend(entries),
@@ -72,9 +68,8 @@ pub(crate) fn parse_yaml_str(
             .as_str()
             .ok_or_else(|| eyre::eyre!("Invalid service name in {path:?}"))?;
 
-        if let Some(image) = svc
-            .get(Value::String("image".to_string()))
-            .and_then(Value::as_str)
+        if let Some(image) =
+            svc.get(Value::String("image".to_string())).and_then(Value::as_str)
         {
             entries.push(ServiceEntry {
                 path: path.to_path_buf(),

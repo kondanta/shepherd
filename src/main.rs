@@ -70,11 +70,7 @@ async fn serve(
             std::process::exit(1);
         });
 
-    let state = AppState {
-        config,
-        orchestrator: Arc::new(orchestrator),
-        flags,
-    };
+    let state = AppState { config, orchestrator: Arc::new(orchestrator), flags };
 
     tracing::info!("Starting shepherd on {addr}");
 
@@ -82,10 +78,8 @@ async fn serve(
     let handle: Handle<SocketAddr> = Handle::new();
     tokio::spawn(shutdown_signal(handle.clone()));
 
-    let result = axum_server::bind(addr)
-        .handle(handle)
-        .serve(app.into_make_service())
-        .await;
+    let result =
+        axum_server::bind(addr).handle(handle).serve(app.into_make_service()).await;
 
     // Flush telemetry regardless of how the server exits.
     if let Some(provider) = tracer_provider
@@ -102,9 +96,7 @@ async fn serve(
 
 async fn shutdown_signal(handle: Handle<SocketAddr>) {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        tokio::signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]

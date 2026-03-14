@@ -94,10 +94,7 @@ impl DeploymentOrchestrator {
 
     /// Look up a service by name from the current filesystem state.
     pub fn find_service(&self, name: &str) -> Result<Option<ServiceEntry>> {
-        Ok(self
-            .get_managed_services()?
-            .into_iter()
-            .find(|s| s.name == name))
+        Ok(self.get_managed_services()?.into_iter().find(|s| s.name == name))
     }
 
     /// Validate tag policy then pull + restart. Used by the manual deploy path.
@@ -243,11 +240,9 @@ impl DeploymentOrchestrator {
             .await
             .wrap_err_with(|| format!("Writing temp file {tmp_path:?}"))?;
 
-        tokio::fs::rename(&tmp_path, &local_path)
-            .await
-            .wrap_err_with(|| {
-                format!("Renaming temp file {tmp_path:?} → {local_path:?}")
-            })?;
+        tokio::fs::rename(&tmp_path, &local_path).await.wrap_err_with(|| {
+            format!("Renaming temp file {tmp_path:?} → {local_path:?}")
+        })?;
 
         tracing::info!("Updated local compose file: {local_path:?}");
         Ok((old_services, new_services))
@@ -384,10 +379,7 @@ pub(crate) fn check_tag_policy(
 }
 
 fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
 fn duration_secs(d: Duration) -> f64 {

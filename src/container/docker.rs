@@ -28,11 +28,7 @@ impl DockerClient {
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-        if ok {
-            Ok(())
-        } else {
-            Err(eyre!("Failed to find docker compose plugin"))
-        }
+        if ok { Ok(()) } else { Err(eyre!("Failed to find docker compose plugin")) }
     }
 
     pub async fn pull_image(&self, image: &str) -> Result<()> {
@@ -64,18 +60,19 @@ impl DockerClient {
             eyre!("Failed to get parent directory of compose file")
         })?;
 
-        let file_name = compose_file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| {
+        let file_name =
+            compose_file.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
                 eyre!("Compose file path is not valid UTF-8: {compose_file:?}")
             })?;
 
         let mut cmd = TokioCommand::new(&self.docker_bin);
-        cmd.current_dir(compose_dir)
-            .arg("compose")
-            .args(["-f", file_name])
-            .args(["up", "-d", "--force-recreate", "--no-deps", service_name]);
+        cmd.current_dir(compose_dir).arg("compose").args(["-f", file_name]).args([
+            "up",
+            "-d",
+            "--force-recreate",
+            "--no-deps",
+            service_name,
+        ]);
 
         let output = cmd
             .output()
