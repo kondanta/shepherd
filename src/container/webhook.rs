@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 /// GitHub push webhook payload (simplified)
 /// Full schema: https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
@@ -63,6 +64,24 @@ pub struct Author {
     pub username: Option<String>,
 }
 
+impl Repository {
+    /// The owner part of `full_name` (e.g. "acme" from "acme/my-app").
+    pub fn owner(&self) -> &str {
+        self.full_name
+            .split_once('/')
+            .map(|(o, _)| o)
+            .unwrap_or(&self.full_name)
+    }
+
+    /// The repo part of `full_name` (e.g. "my-app" from "acme/my-app").
+    pub fn repo_name(&self) -> &str {
+        self.full_name
+            .split_once('/')
+            .map(|(_, r)| r)
+            .unwrap_or(&self.full_name)
+    }
+}
+
 /// Event type from X-GitHub-Event header
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebhookEvent {
@@ -95,19 +114,14 @@ impl WebhookPayload {
         })
     }
 
-    /// Get the branch name (without "refs/heads/" prefix)
-    pub fn branch_name(&self) -> Option<&str> {
-        self.git_ref.strip_prefix("refs/heads/")
-    }
-
-    /// Check if any docker-compose files were modified
-    pub fn has_compose_changes(&self) -> bool {
-        self.commits.iter().any(|c| {
-            c.modified
-                .iter()
-                .chain(c.added.iter())
-                .any(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
-        })
+    /// Returns all compose files (*.yaml / *.yml) touched across all commits.
+    pub fn modified_compose_files(&self) -> HashSet<String> {
+        self.commits
+            .iter()
+            .flat_map(|c| c.modified.iter().chain(c.added.iter()))
+            .filter(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
+            .cloned()
+            .collect()
     }
 }
 
@@ -153,10 +167,9 @@ mod tests {
         let payload: WebhookPayload = serde_json::from_str(json).unwrap();
 
         assert_eq!(payload.repository.name, "my-app");
-        assert_eq!(payload.branch_name(), Some("main"));
         assert!(payload.is_default_branch());
         assert!(payload.is_renovate_commit("renovate", "renovate"));
-        assert!(payload.has_compose_changes());
+        assert!(!payload.modified_compose_files().is_empty());
     }
 
     #[test]

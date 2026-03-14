@@ -1,4 +1,5 @@
 use color_eyre::Result;
+use std::time::Duration;
 
 pub struct GitHubClient {
     client: reqwest::Client,
@@ -8,13 +9,14 @@ pub struct GitHubClient {
 impl GitHubClient {
     pub fn new(token: Option<String>) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("Failed to build reqwest client"),
             token,
         }
     }
 
-    /// Fetch file content from GitHub at a specific commit
-    /// Uses raw.githubusercontent.com for simplicity
     pub async fn fetch_file_content(
         &self,
         owner: &str,

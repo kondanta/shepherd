@@ -7,18 +7,16 @@ use tokio::process::Command as TokioCommand;
 
 pub struct DockerClient {
     docker_bin: String,
-    compose_bin: String,
 }
 
 impl DockerClient {
     pub fn new() -> Result<Self> {
         let docker_bin = Self::find_executable("docker")?;
-        let compose_bin = Self::find_compose_binary()?;
+        // Validate compose plugin is available at startup; we use docker_bin
+        // at runtime so there's no separate binary path to store.
+        Self::find_compose_binary()?;
 
-        Ok(Self {
-            docker_bin,
-            compose_bin,
-        })
+        Ok(Self { docker_bin })
     }
 
     fn find_executable(name: &str) -> Result<String> {
@@ -68,11 +66,16 @@ impl DockerClient {
             eyre!("Failed to get parent directory of compose file")
         })?;
 
-        let mut cmd = TokioCommand::new("docker");
+        let mut cmd = TokioCommand::new(&self.docker_bin);
         cmd.arg("compose");
 
+        let file_name = compose_file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| eyre!("Compose file path is not valid UTF-8: {compose_file:?}"))?;
+
         cmd.current_dir(compose_dir)
-            .args(["-f", compose_file.file_name().unwrap().to_str().unwrap()])
+            .args(["-f", file_name])
             .args(["up", "-d", "--force-recreate", "--no-deps", service_name]);
 
         let output = cmd
@@ -87,22 +90,6 @@ impl DockerClient {
 
         tracing::info!("Successfully restarted compose service: {}", service_name);
         Ok(())
-    }
-
-    pub async fn is_container_running(&self, container_name: &str) -> Result<bool> {
-        let output = TokioCommand::new(&self.docker_bin)
-            .args(["ps", "-q", "-f", &format!("name={}", container_name)])
-            .output()
-            .await
-            .wrap_err("Failed to check container status")?;
-
-        Ok(!output.stdout.is_empty())
-    }
-}
-
-impl Default for DockerClient {
-    fn default() -> Self {
-        Self::new().expect("Failed to initialize DockerClient")
     }
 }
 

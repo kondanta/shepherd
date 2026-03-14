@@ -10,6 +10,9 @@ pub struct ServiceEntry {
     pub path: PathBuf,
     pub name: String,
     pub image: String,
+    /// Full service config used for change detection; excluded from API output.
+    #[serde(skip)]
+    pub raw_config: Value,
 }
 
 // Scans the filesystem starting from `root` and returns a list of ServiceEntry found in YAML files.
@@ -33,21 +36,19 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
             .unwrap_or(false)
         {
             tracing::debug!("Parsing YAML file: {:?}", path);
-            results.extend(parse_yaml_file(path)?);
+            match parse_yaml_file(path) {
+                    Ok(entries) => results.extend(entries),
+                    Err(e) => tracing::debug!("Skipping {path:?}: {e}"),
+                }
         }
     }
 
     Ok(results)
 }
 
-// Parses a single compose YAML file and extracts service entries.
-pub(crate) fn parse_compose_file(path: &Path) -> Result<Vec<ServiceEntry>> {
-    parse_yaml_file(path)
-}
-
-fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
+pub(crate) fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
     let content = fs::read_to_string(path)
-        .wrap_err_with(|| format!("Rading file {path:?}"))?;
+        .wrap_err_with(|| format!("Reading file {path:?}"))?;
 
     let yaml: Value = serde_yaml::from_str(&content)
         .wrap_err_with(|| format!("Parsing YAML file {path:?}"))?;
@@ -72,6 +73,7 @@ fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
                 path: path.to_path_buf(),
                 name: service_name.to_string(),
                 image: image.to_string(),
+                raw_config: svc.clone(),
             });
         }
     }

@@ -1,4 +1,3 @@
-#[allow(dead_code)]
 pub mod docker;
 pub mod github;
 pub mod image;
@@ -8,13 +7,15 @@ pub use docker::DockerClient;
 pub use github::GitHubClient;
 pub use image::ImageReference;
 
+use crate::config::Config;
+use crate::features::SharedFlags;
 use crate::fs::walk::ServiceEntry;
 use color_eyre::Result;
+use eyre::WrapErr;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
-use eyre::WrapErr;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,140 +38,123 @@ pub struct DeploymentOrchestrator {
     docker_client: DockerClient,
     github_client: GitHubClient,
     root_dir: PathBuf,
-    history: Vec<Deployment>,
+    renovate_username: String,
+    renovate_email: String,
+    allow_latest: bool,
+    flags: SharedFlags,
+    history: VecDeque<Deployment>,
 }
 
 impl DeploymentOrchestrator {
-    pub fn new(root_dir: PathBuf, github_token: Option<String>) -> Result<Self> {
+    pub fn new(config: &Config, flags: SharedFlags) -> Result<Self> {
         Ok(Self {
             docker_client: DockerClient::new()?,
-            github_client: GitHubClient::new(github_token),
-            root_dir,
-            history: Vec::new(),
+            github_client: GitHubClient::new(config.github_token.clone()),
+            root_dir: PathBuf::from(&config.root_dir),
+            renovate_username: config.renovate_username.clone(),
+            renovate_email: config.renovate_email.clone(),
+            allow_latest: config.allow_latest_images,
+            flags,
+            history: VecDeque::new(),
         })
     }
 
-    async fn update_service(&self, service: &ServiceEntry) -> Result<()> {
-        tracing::info!("Updating service: {}", service.name);
-        let image_ref = ImageReference::parse(&service.image)?;
-        self.docker_client.pull_image(&image_ref).await?;
-        self.docker_client
-            .restart_compose_service(&service.path, &service.name)
+    async fn sync_compose_file(
+        &self,
+        owner: &str,
+        repo: &str,
+        file_path: &str,
+        sha: &str,
+    ) -> Result<(Vec<ServiceEntry>, Vec<ServiceEntry>)> {
+        let local_path = self.root_dir.join(file_path);
+
+        let old_services = if local_path.exists() {
+            crate::fs::walk::parse_yaml_file(&local_path).unwrap_or_default()
+        } else {
+            vec![]
+        };
+
+        let content = self
+            .github_client
+            .fetch_file_content(owner, repo, file_path, sha)
             .await?;
-        Ok(())
+
+        if let Some(parent) = local_path.parent() {
+            std::fs::create_dir_all(parent)
+                .wrap_err_with(|| format!("Creating dirs for {local_path:?}"))?;
+        }
+        std::fs::write(&local_path, content.as_bytes())
+            .wrap_err_with(|| format!("Writing {local_path:?}"))?;
+        tracing::info!("Updated local compose file: {local_path:?}");
+
+        let new_services =
+            crate::fs::walk::parse_yaml_file(&local_path).unwrap_or_default();
+
+        Ok((old_services, new_services))
     }
 
-    fn record(&mut self, deployment: Deployment) {
-        self.history.push(deployment);
-        if self.history.len() > 200 {
-            self.history.remove(0);
-        }
-    }
+    fn diff_services(
+        &self,
+        old: &[ServiceEntry],
+        new: Vec<ServiceEntry>,
+    ) -> Vec<ServiceEntry> {
+        let mut to_deploy = Vec::new();
 
-    pub fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
-        crate::fs::walk::scan_filesystem(&self.root_dir)
-    }
-
-    pub fn list_deployments(&self) -> Vec<Deployment> {
-        self.history.iter().rev().cloned().collect()
-    }
-
-    pub async fn handle_webhook(
-        &mut self,
-        payload: &webhook::WebhookPayload,
-        renovate_username: &str,
-        renovate_email: &str,
-    ) -> Result<()> {
-        if !payload.is_default_branch() {
-            tracing::info!("Ignoring push to non-default branch");
-            return Ok(());
-        }
-        if !payload.is_renovate_commit(renovate_username, renovate_email) {
-            tracing::info!("Ignoring non-Renovate commit");
-            return Ok(());
-        }
-        if !payload.has_compose_changes() {
-            tracing::info!("No compose file changes, skipping");
-            return Ok(());
-        }
-
-        let changed_images: HashSet<String> = payload
-            .commits
-            .iter()
-            .flat_map(|c| parse_updated_images_from_commit(&c.message))
-            .collect();
-
-        let modified_files: HashSet<String> = payload
-            .commits
-            .iter()
-            .flat_map(|c| c.modified.iter().chain(c.added.iter()))
-            .cloned()
-            .collect();
-
-        let services = self.get_managed_services()?;
-
-        for service in &services {
-            if !modified_files.iter().any(|f| service.path.ends_with(f.as_str())) {
+        for svc in new {
+            let prev = old.iter().find(|s| s.name == svc.name);
+            let changed = prev.is_none_or(|o| o.raw_config != svc.raw_config);
+            if !changed {
                 continue;
             }
 
-            let image_base = service
-                .image
-                .split('/')
-                .last()
-                .unwrap_or(&service.image)
-                .split(':')
-                .next()
-                .unwrap_or(&service.image)
-                .to_string();
-
-            if !changed_images.is_empty() && !changed_images.contains(&image_base) {
-                continue;
-            }
-
-            let service_name = service.name.clone();
-            let service_image = service.image.clone();
-            let timestamp = now_secs();
-            let result = self.update_service(service).await;
-
-            match result {
-                Ok(()) => self.record(Deployment {
-                    service: service_name,
-                    image: service_image,
-                    status: DeploymentStatus::Success,
-                    timestamp,
-                    error: None,
-                }),
+            let image_ref = match ImageReference::parse(&svc.image) {
+                Ok(r) => r,
                 Err(e) => {
-                    let msg = format!("{e:?}");
-                    tracing::error!("Failed to update {service_name}: {msg}");
-                    self.record(Deployment {
-                        service: service_name,
-                        image: service_image,
-                        status: DeploymentStatus::Failed,
-                        timestamp,
-                        error: Some(msg),
-                    });
+                    tracing::warn!(
+                        "Skipping {}: unparseable image '{}': {e:?}",
+                        svc.name,
+                        svc.image
+                    );
+                    continue;
                 }
+            };
+
+            if image_ref.tag.is_latest() && !self.allow_latest {
+                tracing::warn!(
+                    "Skipping {}: image uses 'latest' tag \
+                     (set ALLOW_LATEST_IMAGES=true to override)",
+                    svc.name
+                );
+                continue;
             }
+
+            if !image_ref.tag.is_semver() {
+                tracing::warn!(
+                    "Service {} uses non-semver tag '{}' — \
+                     pinning to a version tag is recommended",
+                    svc.name,
+                    image_ref.tag
+                );
+            }
+
+            tracing::info!(
+                "Service {} changed (image: {:?} → {}), queuing restart",
+                svc.name,
+                prev.map(|o| o.image.as_str()),
+                svc.image,
+            );
+            to_deploy.push(svc);
         }
 
-        Ok(())
+        to_deploy
     }
 
-    pub async fn deploy_service_by_name(&mut self, name: &str) -> Result<()> {
-        let services = self.get_managed_services()?;
-        let service = services
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| color_eyre::eyre::eyre!("Service '{name}' not found"))?;
-
+    async fn execute_and_record(&mut self, service: &ServiceEntry) -> Result<()> {
         let service_name = service.name.clone();
         let service_image = service.image.clone();
         let timestamp = now_secs();
-        let result = self.update_service(service).await;
 
-        match result {
+        match self.update_service(service).await {
             Ok(()) => {
                 self.record(Deployment {
                     service: service_name,
@@ -194,6 +178,109 @@ impl DeploymentOrchestrator {
             }
         }
     }
+
+    async fn update_service(&self, service: &ServiceEntry) -> Result<()> {
+        tracing::info!("Updating service: {}", service.name);
+        let image_ref = ImageReference::parse(&service.image)?;
+
+        if self.flags.load().dry_run {
+            tracing::info!(
+                "[dry-run] Would pull {} and restart {}",
+                image_ref,
+                service.name
+            );
+            return Ok(());
+        }
+
+        self.docker_client.pull_image(&image_ref).await?;
+        self.docker_client
+            .restart_compose_service(&service.path, &service.name)
+            .await?;
+        Ok(())
+    }
+
+    fn record(&mut self, deployment: Deployment) {
+        self.history.push_back(deployment);
+        if self.history.len() > 200 {
+            self.history.pop_front();
+        }
+    }
+
+    pub fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
+        crate::fs::walk::scan_filesystem(&self.root_dir)
+    }
+
+    pub fn list_deployments(&self) -> Vec<Deployment> {
+        self.history.iter().rev().cloned().collect::<Vec<_>>()
+    }
+
+    pub async fn handle_webhook(
+        &mut self,
+        payload: &webhook::WebhookPayload,
+    ) -> Result<()> {
+        if !payload.is_default_branch() {
+            tracing::info!("Ignoring push to non-default branch");
+            return Ok(());
+        }
+        if !payload.is_renovate_commit(&self.renovate_username, &self.renovate_email)
+        {
+            tracing::info!("Ignoring non-Renovate commit");
+            return Ok(());
+        }
+        let modified_compose_files = payload.modified_compose_files();
+        if modified_compose_files.is_empty() {
+            tracing::info!("No compose file changes, skipping");
+            return Ok(());
+        }
+        let owner = payload.repository.owner();
+        let repo = payload.repository.repo_name();
+
+        let mut to_restart: Vec<ServiceEntry> = Vec::new();
+
+        for file_path in &modified_compose_files {
+            match self
+                .sync_compose_file(owner, repo, file_path, &payload.after)
+                .await
+            {
+                Ok((old, new)) => to_restart.extend(self.diff_services(&old, new)),
+                Err(e) => tracing::warn!("Failed to sync {file_path}: {e:?}"),
+            }
+        }
+
+        for service in &to_restart {
+            if let Err(e) = self.execute_and_record(service).await {
+                tracing::error!("Failed to update {}: {e:?}", service.name);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn deploy_service_by_name(&mut self, name: &str) -> Result<()> {
+        let services = self.get_managed_services()?;
+        let service = services
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| color_eyre::eyre::eyre!("Service '{name}' not found"))?
+            .clone();
+
+        let image_ref = ImageReference::parse(&service.image)?;
+        if image_ref.tag.is_latest() && !self.allow_latest {
+            return Err(color_eyre::eyre::eyre!(
+                "Service '{}' uses 'latest' tag; set ALLOW_LATEST_IMAGES=true to override",
+                name
+            ));
+        }
+        if !image_ref.tag.is_semver() {
+            tracing::warn!(
+                "Service {name} uses non-semver tag '{}' — \
+                 pinning to a version tag is recommended",
+                image_ref.tag
+            );
+        }
+
+        self.execute_and_record(&service).await
+    }
 }
 
 fn now_secs() -> u64 {
@@ -201,22 +288,4 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
-}
-
-fn parse_updated_images_from_commit(message: &str) -> Vec<String> {
-    let mut images = Vec::new();
-    let lower = message.to_lowercase();
-
-    if lower.contains("docker tag") || lower.contains("docker digest") {
-        let words: Vec<&str> = message.split_whitespace().collect();
-        for (i, word) in words.iter().enumerate() {
-            if word.to_lowercase() == "docker" && i > 0 {
-                let image = words[i - 1];
-                let image_name = image.split(':').next().unwrap_or(image);
-                images.push(image_name.to_string());
-            }
-        }
-    }
-
-    images
 }

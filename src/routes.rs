@@ -2,15 +2,20 @@ use axum::{
     Json,
     body::Bytes,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Request, StatusCode},
+    middleware::Next,
+    response::{IntoResponse, Response},
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::container::{self, Deployment, DeploymentOrchestrator};
-use crate::{config::Config, fs as f};
+use crate::config::Config;
+use crate::container::{
+    self, Deployment, DeploymentOrchestrator, webhook::WebhookEvent,
+};
+use crate::features::SharedFlags;
 
 #[cfg(feature = "otlp")]
 mod otlp_imports {
@@ -18,7 +23,6 @@ mod otlp_imports {
         KeyValue,
         trace::{TraceContextExt, Tracer},
     };
-    pub use tracing::instrument;
 }
 
 #[cfg(feature = "otlp")]
@@ -28,14 +32,15 @@ use otlp_imports::*;
 pub struct AppState {
     pub config: Arc<Config>,
     pub orchestrator: Arc<Mutex<DeploymentOrchestrator>>,
+    pub flags: SharedFlags,
 }
 
-pub fn make_orchestrator(config: &Config) -> Arc<Mutex<DeploymentOrchestrator>> {
-    let orch = DeploymentOrchestrator::new(
-        PathBuf::from(&config.root_dir),
-        Some("".to_string()),
-    )
-    .expect("Failed to initialize DeploymentOrchestrator");
+pub fn make_orchestrator(
+    config: &Config,
+    flags: SharedFlags,
+) -> Arc<Mutex<DeploymentOrchestrator>> {
+    let orch = DeploymentOrchestrator::new(config, flags)
+        .expect("Failed to initialize DeploymentOrchestrator");
     Arc::new(Mutex::new(orch))
 }
 
@@ -52,7 +57,7 @@ fn verify_github_signature(secret: &str, body: &[u8], signature: &str) -> bool {
     mac.verify_slice(&sig_bytes).is_ok()
 }
 
-pub(crate) fn root() -> &'static str {
+pub(crate) async fn root() -> &'static str {
     tracing::info!("Root endpoint was called");
     "Shepherd is running!"
 }
@@ -70,27 +75,6 @@ pub(crate) async fn metrics() -> Json<&'static str> {
         tracing::info!("Metrics endpoint was called");
     });
     Json("metrics data")
-}
-
-#[derive(serde::Serialize)]
-pub struct DummyResponse {
-    pub results: Vec<f::walk::ServiceEntry>,
-}
-
-#[cfg_attr(feature = "otlp", instrument(skip(state)))]
-pub async fn scan_filesystem(State(state): State<AppState>) -> Json<DummyResponse> {
-    let root_path = std::path::Path::new(&state.config.root_dir);
-    let scan_results = f::walk::scan_filesystem(root_path).unwrap_or_default();
-
-    tracing::info!(
-        "Scanned filesystem at {:?}, found {} services",
-        root_path,
-        scan_results.len()
-    );
-
-    Json(DummyResponse {
-        results: scan_results,
-    })
 }
 
 #[derive(serde::Serialize, Debug, Clone)]
@@ -132,6 +116,24 @@ pub async fn github_webhook(
         return StatusCode::UNAUTHORIZED;
     }
 
+    let event = match headers.get("X-GitHub-Event").and_then(|v| v.to_str().ok()) {
+        Some(e) => WebhookEvent::from_header(e),
+        None => {
+            tracing::warn!("Missing X-GitHub-Event header");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    if event != WebhookEvent::Push {
+        tracing::debug!("Ignoring non-push event: {event:?}");
+        return StatusCode::OK;
+    }
+
+    if state.flags.load().deployments_paused {
+        tracing::info!("Deployments paused, ignoring webhook");
+        return StatusCode::OK;
+    }
+
     let payload =
         match serde_json::from_slice::<container::webhook::WebhookPayload>(&body) {
             Ok(p) => p,
@@ -142,14 +144,7 @@ pub async fn github_webhook(
         };
 
     let mut orch = state.orchestrator.lock().await;
-    if let Err(e) = orch
-        .handle_webhook(
-            &payload,
-            &state.config.renovate_username,
-            &state.config.renovate_email,
-        )
-        .await
-    {
+    if let Err(e) = orch.handle_webhook(&payload).await {
         tracing::error!("Webhook handling failed: {:?}", e);
         return StatusCode::INTERNAL_SERVER_ERROR;
     }
@@ -173,6 +168,11 @@ pub async fn manual_deploy(
     State(state): State<AppState>,
     Json(req): Json<ManualDeployRequest>,
 ) -> StatusCode {
+    if state.flags.load().deployments_paused {
+        tracing::info!("Deployments paused, rejecting manual deploy");
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+
     let mut orch = state.orchestrator.lock().await;
     match orch.deploy_service_by_name(&req.service).await {
         Ok(()) => StatusCode::OK,
@@ -181,4 +181,87 @@ pub async fn manual_deploy(
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
+}
+
+#[derive(serde::Serialize)]
+pub struct FlagsResponse {
+    pub deployments_paused: bool,
+    pub dry_run: bool,
+}
+
+fn unauthorized(reason: &str) -> Response {
+    tracing::warn!("Unauthorized /flags access: {}", reason);
+    let body = serde_json::json!({ "error": "unauthorized", "reason": reason });
+    (
+        StatusCode::UNAUTHORIZED,
+        [("content-type", "application/json")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
+pub async fn require_api_token(
+    State(state): State<AppState>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let Some(expected) = &state.config.api_token else {
+        return unauthorized("API_TOKEN is not configured on this instance");
+    };
+
+    let provided = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    match provided {
+        Some(token) if token == expected => next.run(req).await,
+        Some(_) => unauthorized("invalid token"),
+        None => unauthorized("missing Authorization header"),
+    }
+}
+
+pub async fn get_flags(State(state): State<AppState>) -> Json<FlagsResponse> {
+    let f = state.flags.load();
+    Json(FlagsResponse {
+        deployments_paused: f.deployments_paused,
+        dry_run: f.dry_run,
+    })
+}
+
+pub async fn pause_deployments(State(state): State<AppState>) -> StatusCode {
+    state.flags.rcu(|f| crate::features::RuntimeFlags {
+        deployments_paused: true,
+        ..(**f).clone()
+    });
+    tracing::info!("Deployments paused");
+    StatusCode::OK
+}
+
+pub async fn resume_deployments(State(state): State<AppState>) -> StatusCode {
+    state.flags.rcu(|f| crate::features::RuntimeFlags {
+        deployments_paused: false,
+        ..(**f).clone()
+    });
+    tracing::info!("Deployments resumed");
+    StatusCode::OK
+}
+
+pub async fn enable_dry_run(State(state): State<AppState>) -> StatusCode {
+    state.flags.rcu(|f| crate::features::RuntimeFlags {
+        dry_run: true,
+        ..(**f).clone()
+    });
+    tracing::info!("Dry-run mode enabled");
+    StatusCode::OK
+}
+
+pub async fn disable_dry_run(State(state): State<AppState>) -> StatusCode {
+    state.flags.rcu(|f| crate::features::RuntimeFlags {
+        dry_run: false,
+        ..(**f).clone()
+    });
+    tracing::info!("Dry-run mode disabled");
+    StatusCode::OK
 }
