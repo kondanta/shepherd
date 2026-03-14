@@ -6,6 +6,7 @@ mod config;
 mod container;
 mod features;
 mod fs;
+mod metrics;
 mod routes;
 mod tracing_setup;
 

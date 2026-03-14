@@ -18,6 +18,7 @@ impl GitHubClient {
         }
     }
 
+    #[tracing::instrument(skip(self), fields(owner, repo, path, sha))]
     pub async fn fetch_file_content(
         &self,
         owner: &str,

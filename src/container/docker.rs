@@ -20,7 +20,7 @@ impl DockerClient {
             .map(|p| p.to_string_lossy().to_string())
     }
 
-    async fn verify_compose_available() -> Result<()> {
+    pub(crate) async fn verify_compose_available() -> Result<()> {
         let ok = TokioCommand::new("docker")
             .args(["compose", "version"])
             .output()

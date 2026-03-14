@@ -16,7 +16,7 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -77,7 +77,9 @@ impl DeploymentOrchestrator {
     // ── public API ────────────────────────────────────────────────────────────
 
     pub fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
-        crate::fs::walk::scan_filesystem(&self.root_dir)
+        let services = crate::fs::walk::scan_filesystem(&self.root_dir)?;
+        crate::metrics::set_managed_services(services.len());
+        Ok(services)
     }
 
     pub fn list_deployments(&self) -> Vec<Deployment> {
@@ -189,6 +191,7 @@ impl DeploymentOrchestrator {
     ///
     /// Uses an atomic write (temp file → rename) so a parse failure on the
     /// new content never corrupts the existing local file.
+    #[tracing::instrument(skip(self), fields(owner, repo, file_path, sha))]
     async fn sync_compose_file(
         &self,
         owner: &str,
@@ -248,10 +251,14 @@ impl DeploymentOrchestrator {
         Ok((old_services, new_services))
     }
 
+    #[tracing::instrument(skip(self), fields(service = %service.name, image = %service.image))]
     async fn execute_and_record(&self, service: &ServiceEntry) -> Result<()> {
         let timestamp = now_secs();
+        let start = Instant::now();
         match self.update_service(service).await {
             Ok(()) => {
+                let elapsed = duration_secs(start.elapsed());
+                crate::metrics::deployment_recorded(&service.name, true, elapsed);
                 self.record(Deployment {
                     service: service.name.clone(),
                     image: service.image.clone(),
@@ -262,6 +269,8 @@ impl DeploymentOrchestrator {
                 Ok(())
             }
             Err(e) => {
+                let elapsed = duration_secs(start.elapsed());
+                crate::metrics::deployment_recorded(&service.name, false, elapsed);
                 self.record(Deployment {
                     service: service.name.clone(),
                     image: service.image.clone(),
@@ -274,6 +283,7 @@ impl DeploymentOrchestrator {
         }
     }
 
+    #[tracing::instrument(skip(self), fields(service = %service.name))]
     async fn update_service(&self, service: &ServiceEntry) -> Result<()> {
         tracing::info!("Updating service: {}", service.name);
 
@@ -376,6 +386,10 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn duration_secs(d: Duration) -> f64 {
+    d.as_secs_f64()
 }
 
 #[cfg(test)]
