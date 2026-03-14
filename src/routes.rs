@@ -1,15 +1,15 @@
 use axum::{
     Json,
     body::Bytes,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::{HeaderMap, Request, StatusCode},
-    middleware::Next,
+    middleware::{self, Next},
     response::{IntoResponse, Response},
+    routing::{get, post},
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::config::Config;
 use crate::container::{
@@ -31,18 +31,80 @@ use otlp_imports::*;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub orchestrator: Arc<Mutex<DeploymentOrchestrator>>,
+    pub orchestrator: Arc<DeploymentOrchestrator>,
     pub flags: SharedFlags,
 }
 
-pub fn make_orchestrator(
-    config: &Config,
-    flags: SharedFlags,
-) -> Arc<Mutex<DeploymentOrchestrator>> {
-    let orch = DeploymentOrchestrator::new(config, flags)
-        .expect("Failed to initialize DeploymentOrchestrator");
-    Arc::new(Mutex::new(orch))
+/// Build the complete router. This is the single place that owns all route
+/// definitions and their middleware — `main` just binds and serves.
+pub fn router(state: AppState) -> axum::Router {
+    if state.config.api_token.is_none() {
+        tracing::warn!("API_TOKEN not set; /flags/* endpoints will return 401");
+    }
+
+    let flags_router = axum::Router::new()
+        .route("/flags", get(get_flags))
+        .route("/flags/pause", post(pause_deployments))
+        .route("/flags/resume", post(resume_deployments))
+        .route("/flags/dry-run/enable", post(enable_dry_run))
+        .route("/flags/dry-run/disable", post(disable_dry_run))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_token,
+        ));
+
+    let app = axum::Router::new()
+        .route("/", get(root))
+        .route("/health", get(health_check))
+        .route("/list-services", get(list_managed_services))
+        .route(
+            "/webhook/github",
+            post(github_webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route("/deployments", get(list_deployments))
+        .route("/deploy", post(manual_deploy))
+        .merge(flags_router);
+
+    #[cfg(feature = "otlp")]
+    let app = app.route("/metrics", get(metrics));
+
+    app.with_state(state)
 }
+
+// ── middleware ────────────────────────────────────────────────────────────────
+
+fn unauthorized(reason: &str) -> Response {
+    tracing::warn!("Unauthorized /flags access: {}", reason);
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(serde_json::json!({ "error": "unauthorized", "reason": reason })),
+    )
+        .into_response()
+}
+
+pub async fn require_api_token(
+    State(state): State<AppState>,
+    req: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    let Some(expected) = &state.config.api_token else {
+        return unauthorized("API_TOKEN is not configured on this instance");
+    };
+
+    let provided = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+
+    match provided {
+        Some(token) if token == expected => next.run(req).await,
+        Some(_) => unauthorized("invalid token"),
+        None => unauthorized("missing Authorization header"),
+    }
+}
+
+// ── signature verification ────────────────────────────────────────────────────
 
 fn verify_github_signature(secret: &str, body: &[u8], signature: &str) -> bool {
     let Some(sig_hex) = signature.strip_prefix("sha256=") else {
@@ -57,13 +119,23 @@ fn verify_github_signature(secret: &str, body: &[u8], signature: &str) -> bool {
     mac.verify_slice(&sig_bytes).is_ok()
 }
 
+// ── handlers ──────────────────────────────────────────────────────────────────
+
 pub(crate) async fn root() -> &'static str {
-    tracing::info!("Root endpoint was called");
     "Shepherd is running!"
 }
 
-pub(crate) async fn health_check() -> StatusCode {
-    StatusCode::OK
+pub(crate) async fn health_check(
+    State(state): State<AppState>,
+) -> StatusCode {
+    let root_dir = &state.config.root_dir;
+    match tokio::fs::metadata(root_dir).await {
+        Ok(m) if m.is_dir() => StatusCode::OK,
+        _ => {
+            tracing::error!("Health check failed: ROOT_DIR {root_dir:?} is not accessible");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    }
 }
 
 #[cfg(feature = "otlp")]
@@ -86,8 +158,7 @@ pub struct ManagedServicesResponse {
 pub async fn list_managed_services(
     State(state): State<AppState>,
 ) -> Result<Json<ManagedServicesResponse>, StatusCode> {
-    let orch = state.orchestrator.lock().await;
-    let services = orch.get_managed_services().map_err(|e| {
+    let services = state.orchestrator.get_managed_services().map_err(|e| {
         tracing::error!("Failed to get managed services: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -143,20 +214,22 @@ pub async fn github_webhook(
             }
         };
 
-    let mut orch = state.orchestrator.lock().await;
-    if let Err(e) = orch.handle_webhook(&payload).await {
-        tracing::error!("Webhook handling failed: {:?}", e);
-        return StatusCode::INTERNAL_SERVER_ERROR;
-    }
+    // Spawn background task so the HTTP response is returned immediately.
+    // The orchestrator's internal semaphore serializes concurrent deployments.
+    let orchestrator = Arc::clone(&state.orchestrator);
+    tokio::spawn(async move {
+        if let Err(e) = orchestrator.handle_webhook(&payload).await {
+            tracing::error!("Webhook handling failed: {:?}", e);
+        }
+    });
 
-    StatusCode::OK
+    StatusCode::ACCEPTED
 }
 
 pub async fn list_deployments(
     State(state): State<AppState>,
 ) -> Json<Vec<Deployment>> {
-    let orch = state.orchestrator.lock().await;
-    Json(orch.list_deployments())
+    Json(state.orchestrator.list_deployments())
 }
 
 #[derive(serde::Deserialize)]
@@ -173,53 +246,36 @@ pub async fn manual_deploy(
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
-    let mut orch = state.orchestrator.lock().await;
-    match orch.deploy_service_by_name(&req.service).await {
+    let service = match state.orchestrator.find_service(&req.service) {
+        Ok(Some(s)) => s,
+        Ok(None) => {
+            tracing::warn!(
+                "Manual deploy requested for unknown service '{}'",
+                req.service
+            );
+            return StatusCode::NOT_FOUND;
+        }
+        Err(e) => {
+            tracing::error!("Failed to scan services: {e:?}");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    match state.orchestrator.deploy_service(&service).await {
         Ok(()) => StatusCode::OK,
         Err(e) => {
-            tracing::error!("Manual deploy of '{}' failed: {:?}", req.service, e);
+            tracing::error!("Manual deploy of '{}' failed: {e:?}", req.service);
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
 }
 
+// ── flag endpoints ────────────────────────────────────────────────────────────
+
 #[derive(serde::Serialize)]
 pub struct FlagsResponse {
     pub deployments_paused: bool,
     pub dry_run: bool,
-}
-
-fn unauthorized(reason: &str) -> Response {
-    tracing::warn!("Unauthorized /flags access: {}", reason);
-    let body = serde_json::json!({ "error": "unauthorized", "reason": reason });
-    (
-        StatusCode::UNAUTHORIZED,
-        [("content-type", "application/json")],
-        body.to_string(),
-    )
-        .into_response()
-}
-
-pub async fn require_api_token(
-    State(state): State<AppState>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> Response {
-    let Some(expected) = &state.config.api_token else {
-        return unauthorized("API_TOKEN is not configured on this instance");
-    };
-
-    let provided = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-
-    match provided {
-        Some(token) if token == expected => next.run(req).await,
-        Some(_) => unauthorized("invalid token"),
-        None => unauthorized("missing Authorization header"),
-    }
 }
 
 pub async fn get_flags(State(state): State<AppState>) -> Json<FlagsResponse> {

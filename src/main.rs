@@ -1,8 +1,4 @@
-use axum::{
-    Router,
-    middleware,
-    routing::{get, post},
-};
+use axum_server::Handle;
 use clap::{Parser, Subcommand};
 use std::{net::SocketAddr, sync::Arc};
 
@@ -13,7 +9,8 @@ mod fs;
 mod routes;
 mod tracing_setup;
 
-use routes::{AppState, make_orchestrator};
+use container::DeploymentOrchestrator;
+use routes::AppState;
 
 #[derive(Parser)]
 struct Cli {
@@ -35,76 +32,97 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     color_eyre::install().expect("Failed to install color_eyre");
+
     let cli = Cli::parse();
-    let config = config::Config::load();
-    let shared_config = Arc::new(config);
-    let tracer_provider = tracing_setup::init_tracing(&shared_config);
-    let flags = features::new_flags();
 
-    let res = match &cli.command {
-        Commands::Serve => {
-            tracing::info!("Starting shepherd server on {}:{}", cli.host, cli.port);
-            let addr = SocketAddr::new(cli.host.parse().unwrap(), cli.port);
-            let orchestrator = make_orchestrator(&shared_config, flags.clone());
-            let state = AppState {
-                config: shared_config.clone(),
-                orchestrator,
-                flags,
-            };
-            let flags_router = Router::new()
-                .route("/flags", get(crate::routes::get_flags))
-                .route("/flags/pause", post(crate::routes::pause_deployments))
-                .route("/flags/resume", post(crate::routes::resume_deployments))
-                .route(
-                    "/flags/dry-run/enable",
-                    post(crate::routes::enable_dry_run),
-                )
-                .route(
-                    "/flags/dry-run/disable",
-                    post(crate::routes::disable_dry_run),
-                )
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    crate::routes::require_api_token,
-                ));
-
-            if state.config.api_token.is_none() {
-                tracing::warn!(
-                    "API_TOKEN is not set; /flags/* endpoints will return 401"
-                );
-            }
-
-            let mut app = Router::new()
-                .route("/", get(crate::routes::root))
-                .route("/health", get(crate::routes::health_check))
-                .route("/list-services", get(crate::routes::list_managed_services))
-                .route("/webhook/github", post(crate::routes::github_webhook))
-                .route("/deployments", get(crate::routes::list_deployments))
-                .route("/deploy", post(crate::routes::manual_deploy))
-                .merge(flags_router)
-                .with_state(state);
-            app = add_feature_routes(app);
-            axum_server::bind(addr).serve(app.into_make_service()).await
-        }
-    };
-
-    if let Err(e) = res {
-        eprintln!("Server error: {e}");
+    let config = config::Config::load().unwrap_or_else(|e| {
+        eprintln!("Configuration error: {e}");
         std::process::exit(1);
-    }
+    });
+    let config = Arc::new(config);
 
-    if let Some(provider) = tracer_provider {
-        provider
-            .shutdown()
-            .expect("Failed to shutdown tracer provider");
+    let tracer_provider = tracing_setup::init_tracing(&config);
+
+    match cli.command {
+        Commands::Serve => serve(cli.host, cli.port, config, tracer_provider).await,
     }
 }
 
-#[allow(unused_mut)]
-fn add_feature_routes(mut app: Router) -> Router {
-    #[cfg(feature = "otlp")]
+async fn serve(
+    host: String,
+    port: u16,
+    config: Arc<config::Config>,
+    tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+) {
+    let host: std::net::IpAddr = host.parse().unwrap_or_else(|_| {
+        eprintln!("Invalid host address: '{host}'");
+        std::process::exit(1);
+    });
+    let addr = SocketAddr::new(host, port);
+
+    let flags = features::new_flags();
+
+    let orchestrator =
+        DeploymentOrchestrator::new(&config, flags.clone())
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to initialize orchestrator: {e}");
+                std::process::exit(1);
+            });
+
+    let state = AppState {
+        config,
+        orchestrator: Arc::new(orchestrator),
+        flags,
+    };
+
+    tracing::info!("Starting shepherd on {addr}");
+
+    let app = routes::router(state);
+    let handle: Handle<SocketAddr> = Handle::new();
+    tokio::spawn(shutdown_signal(handle.clone()));
+
+    let result = axum_server::bind(addr)
+        .handle(handle)
+        .serve(app.into_make_service())
+        .await;
+
+    // Flush telemetry regardless of how the server exits.
+    if let Some(provider) = tracer_provider
+        && let Err(e) = provider.shutdown()
     {
-        app = app.route("/metrics", axum::routing::get(routes::metrics));
+        tracing::warn!("Failed to shutdown tracer provider: {e}");
     }
-    app
+
+    if let Err(e) = result {
+        tracing::error!("Server error: {e}");
+        std::process::exit(1);
+    }
+}
+
+async fn shutdown_signal(handle: Handle<SocketAddr>) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    tracing::info!("Shutdown signal received, starting graceful shutdown");
+    handle.graceful_shutdown(Some(std::time::Duration::from_secs(30)));
 }

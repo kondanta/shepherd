@@ -2,7 +2,7 @@ use color_eyre::Result;
 use eyre::eyre;
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageReference {
     // Full image reference, e.g. "docker.io/library/ubuntu:latest", "ghcr.io/myorg/myimage:1.0.0", "quay.io/coreos/tectonic-console:v2.9.0-tectonic.1"
     pub repository: String,
@@ -14,7 +14,7 @@ pub struct ImageReference {
     pub digest: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImageTag(String);
 
 impl ImageTag {

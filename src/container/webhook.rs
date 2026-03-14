@@ -1,63 +1,41 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashSet;
 
 /// GitHub push webhook payload (simplified)
 /// Full schema: https://docs.github.com/en/webhooks/webhook-events-and-payloads#push
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct WebhookPayload {
     #[serde(rename = "ref")]
     pub git_ref: String, // e.g., "refs/heads/main"
 
-    pub before: String, // SHA before push
-    pub after: String,  // SHA after push (head commit)
+    pub after: String, // SHA after push (head commit)
 
     pub repository: Repository,
-    pub pusher: Pusher,
 
     #[serde(default)]
     pub commits: Vec<Commit>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Repository {
-    pub id: u64,
-    pub name: String,
     pub full_name: String, // e.g., "username/repo"
-
-    #[serde(rename = "clone_url")]
-    pub clone_url: String,
-
-    #[serde(rename = "ssh_url")]
-    pub ssh_url: String,
 
     #[serde(rename = "default_branch")]
     pub default_branch: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct Pusher {
-    pub name: String,
-    pub email: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Commit {
-    pub id: String, // SHA
-    pub message: String,
-    pub timestamp: String,
     pub author: Author,
 
     #[serde(default)]
     pub added: Vec<String>,
 
     #[serde(default)]
-    pub removed: Vec<String>,
-
-    #[serde(default)]
     pub modified: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Author {
     pub name: String,
     pub email: String,
@@ -82,7 +60,7 @@ impl Repository {
     }
 }
 
-/// Event type from X-GitHub-Event header
+/// Event type from X-GitHub-Event header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WebhookEvent {
     Push,
@@ -101,20 +79,26 @@ impl WebhookEvent {
 }
 
 impl WebhookPayload {
-    /// Check if this push is to the default branch (usually main/master)
+    /// Check if this push is to the default branch (usually main/master).
     pub fn is_default_branch(&self) -> bool {
         self.git_ref == format!("refs/heads/{}", self.repository.default_branch)
     }
 
-    /// Check if this looks like a Renovate commit
+    /// Check if this looks like a Renovate commit.
+    /// Prefers exact match on the GitHub `username` field; falls back to
+    /// case-insensitive name equality and email substring for self-hosted
+    /// Renovate variants where the username field may differ.
     pub fn is_renovate_commit(&self, username: &str, email: &str) -> bool {
         self.commits.iter().any(|c| {
-            c.author.name.to_lowercase().contains(username)
+            c.author.username.as_deref() == Some(username)
+                || c.author.name.eq_ignore_ascii_case(username)
                 || c.author.email.to_lowercase().contains(email)
         })
     }
 
     /// Returns all compose files (*.yaml / *.yml) touched across all commits.
+    /// Duplicate delivery of the same webhook is safe: the second pass will
+    /// find no config diff after the first already wrote and deployed.
     pub fn modified_compose_files(&self) -> HashSet<String> {
         self.commits
             .iter()
@@ -166,7 +150,7 @@ mod tests {
 
         let payload: WebhookPayload = serde_json::from_str(json).unwrap();
 
-        assert_eq!(payload.repository.name, "my-app");
+        assert_eq!(payload.repository.full_name, "user/my-app");
         assert!(payload.is_default_branch());
         assert!(payload.is_renovate_commit("renovate", "renovate"));
         assert!(!payload.modified_compose_files().is_empty());
