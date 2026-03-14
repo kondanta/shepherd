@@ -17,11 +17,7 @@ pub(crate) fn webhook_received(disposition: &'static str) {
     .increment(1);
 }
 
-pub(crate) fn deployment_recorded(
-    service: &str,
-    success: bool,
-    duration_secs: f64,
-) {
+pub(crate) fn deployment_recorded(service: &str, success: bool, duration_secs: f64) {
     let status = if success { "success" } else { "failed" };
     metrics::counter!(
         "shepherd_deployments_total",
@@ -40,7 +36,11 @@ pub(crate) fn deployment_recorded(
 }
 
 pub(crate) fn set_deployments_paused(paused: bool) {
-    metrics::gauge!("shepherd_deployments_paused").set(if paused { 1.0 } else { 0.0 });
+    metrics::gauge!("shepherd_deployments_paused").set(if paused {
+        1.0
+    } else {
+        0.0
+    });
 }
 
 pub(crate) fn set_dry_run(enabled: bool) {

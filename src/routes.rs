@@ -9,8 +9,8 @@ use axum::{
 };
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use subtle::ConstantTimeEq;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 
 use crate::config::Config;
 use crate::container::{
@@ -20,7 +20,6 @@ use crate::features::SharedFlags;
 
 #[cfg(feature = "metrics")]
 use axum_prometheus::PrometheusMetricLayer;
-
 
 #[derive(Clone)]
 pub struct AppState {
@@ -102,9 +101,7 @@ pub async fn require_api_token(
         .and_then(|v| v.strip_prefix("Bearer "));
 
     match provided {
-        Some(token)
-            if token.as_bytes().ct_eq(expected.as_bytes()).into() =>
-        {
+        Some(token) if token.as_bytes().ct_eq(expected.as_bytes()).into() => {
             next.run(req).await
         }
         Some(_) => unauthorized("invalid token"),
@@ -170,14 +167,20 @@ pub(crate) async fn health_check(
     match tokio::fs::metadata(root_dir).await {
         Ok(m) if m.is_dir() => (
             StatusCode::OK,
-            Json(HealthResponse { status: "ok", reason: None }),
+            Json(HealthResponse {
+                status: "ok",
+                reason: None,
+            }),
         ),
         _ => {
             let reason = format!("ROOT_DIR {root_dir:?} is not accessible");
             tracing::error!("Liveness check failed: {reason}");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(HealthResponse { status: "error", reason: Some(reason) }),
+                Json(HealthResponse {
+                    status: "error",
+                    reason: Some(reason),
+                }),
             )
         }
     }
@@ -240,7 +243,6 @@ pub(crate) async fn readiness_check(
         }),
     )
 }
-
 
 #[derive(serde::Serialize, Debug, Clone)]
 pub struct ManagedServicesResponse {

@@ -53,7 +53,10 @@ pub(crate) fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
 
 /// Parse compose services from an in-memory string. `path` is used only for
 /// error messages and as the `ServiceEntry.path` value.
-pub(crate) fn parse_yaml_str(content: &str, path: &Path) -> Result<Vec<ServiceEntry>> {
+pub(crate) fn parse_yaml_str(
+    content: &str,
+    path: &Path,
+) -> Result<Vec<ServiceEntry>> {
     let yaml: Value = serde_yaml::from_str(content)
         .wrap_err_with(|| format!("Parsing YAML file {path:?}"))?;
 

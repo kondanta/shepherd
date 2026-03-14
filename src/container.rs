@@ -132,7 +132,8 @@ impl DeploymentOrchestrator {
             tracing::info!("Ignoring push to non-default branch");
             return Ok(());
         }
-        if !payload.is_renovate_commit(&self.renovate_username, &self.renovate_email) {
+        if !payload.is_renovate_commit(&self.renovate_username, &self.renovate_email)
+        {
             tracing::info!("Ignoring non-Renovate commit");
             return Ok(());
         }
@@ -232,9 +233,10 @@ impl DeploymentOrchestrator {
         // Parse in memory first — if GitHub sends broken YAML we never touch
         // the local file. Then atomic rename (write to .tmp, rename) ensures
         // the local file is always complete: either the old or the new content.
-        let new_services =
-            crate::fs::walk::parse_yaml_str(&content, &local_path)
-                .wrap_err("New compose file failed to parse; local file left unchanged")?;
+        let new_services = crate::fs::walk::parse_yaml_str(&content, &local_path)
+            .wrap_err(
+                "New compose file failed to parse; local file left unchanged",
+            )?;
 
         let tmp_path = local_path.with_extension("tmp");
         tokio::fs::write(&tmp_path, content.as_bytes())
@@ -456,10 +458,16 @@ mod tests {
 
     #[test]
     fn diff_detects_config_change_beyond_image() {
-        let old =
-            vec![make_service("web", "nginx:1.25", "image: nginx:1.25\nmemory: 256m")];
-        let new =
-            vec![make_service("web", "nginx:1.25", "image: nginx:1.25\nmemory: 512m")];
+        let old = vec![make_service(
+            "web",
+            "nginx:1.25",
+            "image: nginx:1.25\nmemory: 256m",
+        )];
+        let new = vec![make_service(
+            "web",
+            "nginx:1.25",
+            "image: nginx:1.25\nmemory: 512m",
+        )];
         assert_eq!(diff_services(&old, new, false).len(), 1);
     }
 

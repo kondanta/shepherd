@@ -40,11 +40,13 @@ impl Config {
         let renovate_username = env::var("RENOVATE_USERNAME")
             .unwrap_or_else(|_| "renovate[bot]".to_string());
 
-        let renovate_email = env::var("RENOVATE_EMAIL")
-            .unwrap_or_else(|_| "renovate[bot]@users.noreply.github.com".to_string());
+        let renovate_email = env::var("RENOVATE_EMAIL").unwrap_or_else(|_| {
+            "renovate[bot]@users.noreply.github.com".to_string()
+        });
 
-        let webhook_secret = env::var("WEBHOOK_SECRET")
-            .map_err(|_| "WEBHOOK_SECRET environment variable must be set".to_string())?;
+        let webhook_secret = env::var("WEBHOOK_SECRET").map_err(|_| {
+            "WEBHOOK_SECRET environment variable must be set".to_string()
+        })?;
 
         if webhook_secret.is_empty() {
             return Err("WEBHOOK_SECRET must not be empty".to_string());
@@ -59,7 +61,8 @@ impl Config {
 
         #[cfg(feature = "otlp")]
         let otlp_endpoint = env::var("OTLP_ENDPOINT").map_err(|_| {
-            "OTLP_ENDPOINT must be set when the 'otlp' feature is enabled".to_string()
+            "OTLP_ENDPOINT must be set when the 'otlp' feature is enabled"
+                .to_string()
         })?;
 
         Ok(Config {

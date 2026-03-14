@@ -46,8 +46,8 @@ impl GitHubClient {
 
             match self.try_fetch(&url).await {
                 Ok(content) => return Ok(content),
-                Err((e, true)) => last_err = Some(e),   // transient — retry
-                Err((e, false)) => return Err(e),        // permanent — fail fast
+                Err((e, true)) => last_err = Some(e), // transient — retry
+                Err((e, false)) => return Err(e),     // permanent — fail fast
             }
         }
 
@@ -57,7 +57,10 @@ impl GitHubClient {
     /// Returns `Ok(content)` on success, `Err((error, retriable))` on failure.
     /// Only 5xx responses and 429 Too Many Requests are considered retriable;
     /// 4xx client errors (except 429) are permanent and should not be retried.
-    async fn try_fetch(&self, url: &str) -> Result<String, (color_eyre::Report, bool)> {
+    async fn try_fetch(
+        &self,
+        url: &str,
+    ) -> Result<String, (color_eyre::Report, bool)> {
         tracing::debug!("Fetching file from GitHub: {}", url);
 
         let mut request = self.client.get(url);
