@@ -31,9 +31,8 @@ impl DockerClient {
         if ok { Ok(()) } else { Err(eyre!("Failed to find docker compose plugin")) }
     }
 
+    #[tracing::instrument(skip(self), fields(image = %image))]
     pub async fn pull_image(&self, image: &str) -> Result<()> {
-        tracing::info!("Pulling image: {}", image);
-
         let output = TokioCommand::new(&self.docker_bin)
             .args(["pull", image])
             .output()
@@ -45,16 +44,15 @@ impl DockerClient {
             return Err(eyre!("Docker pull failed: {}", stderr));
         }
 
-        tracing::info!("Successfully pulled image: {}", image);
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(service = %service_name, file = ?compose_file))]
     pub async fn restart_compose_service(
         &self,
         compose_file: &Path,
         service_name: &str,
     ) -> Result<()> {
-        tracing::info!("Restarting compose service: {}", service_name);
 
         let compose_dir = compose_file.parent().ok_or_else(|| {
             eyre!("Failed to get parent directory of compose file")
@@ -84,7 +82,6 @@ impl DockerClient {
             return Err(eyre!("docker compose up failed: {}", stderr));
         }
 
-        tracing::info!("Successfully restarted compose service: {}", service_name);
         Ok(())
     }
 }
