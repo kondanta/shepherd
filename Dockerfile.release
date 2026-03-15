@@ -4,7 +4,7 @@
 #
 # For local development use `Dockerfile` instead — it compiles from source.
 
-FROM docker:cli
+FROM docker:cli@sha256:067c301efe497cd5d174d468b7b3422a485ae4aca8f7ec1ffd4655c9fa383af2
 
 # TARGETARCH is set automatically by docker buildx to "amd64" or "arm64".
 ARG TARGETARCH
