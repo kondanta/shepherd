@@ -104,8 +104,9 @@ impl GitHubClient {
 
     /// Returns `(head_sha, new_commits_oldest_first)`.
     ///
-    /// Pass `since_sha = None` on first call to initialise without deploying.
-    /// Pass the previously returned `head_sha` on subsequent calls to get only
+    /// When `since_sha` is `None` (first call), returns just the HEAD commit so
+    /// the caller can sync to the current repo state on startup.
+    /// On subsequent calls pass the previously returned `head_sha` to get only
     /// commits that arrived since the last poll.
     #[tracing::instrument(skip(self), fields(owner, repo, branch))]
     pub async fn commits_since(
@@ -124,7 +125,13 @@ impl GitHubClient {
         let head_sha = items.first().map(|c| c.sha.clone()).unwrap_or_default();
 
         let Some(base) = since_sha else {
-            return Ok((head_sha, vec![]));
+            let head_commit = items.first().map(|c| PollCommit {
+                sha: c.sha.clone(),
+                author_name: c.commit.author.name.clone(),
+                author_email: c.commit.author.email.clone(),
+                author_login: c.author.as_ref().map(|u| u.login.clone()),
+            });
+            return Ok((head_sha, head_commit.into_iter().collect()));
         };
 
         let pos = items.iter().position(|c| c.sha == base);

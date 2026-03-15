@@ -47,6 +47,7 @@ pub struct DeploymentOrchestrator {
     docker_client: DockerClient,
     github_client: GitHubClient,
     root_dir: PathBuf,
+    repo_path_prefix: Option<String>,
     renovate_username: String,
     renovate_email: String,
     allow_latest: bool,
@@ -65,6 +66,7 @@ impl DeploymentOrchestrator {
             docker_client: DockerClient::new().await?,
             github_client: GitHubClient::new(config.github_token.clone()),
             root_dir: PathBuf::from(&config.root_dir),
+            repo_path_prefix: config.repo_path_prefix.clone(),
             renovate_username: config.renovate_username.clone(),
             renovate_email: config.renovate_email.clone(),
             allow_latest: config.allow_latest_images,
@@ -178,12 +180,25 @@ impl DeploymentOrchestrator {
 
         let mut to_restart: Vec<ServiceEntry> = Vec::new();
 
-        for file_path in modified_files {
-            match self.sync_compose_file(owner, repo, file_path, sha).await {
+        for github_path in modified_files {
+            let local_rel = match self.strip_repo_prefix(github_path) {
+                Some(p) => p.to_owned(),
+                None => {
+                    tracing::debug!(
+                        github_path,
+                        "Skipping file outside repo_path_prefix"
+                    );
+                    continue;
+                }
+            };
+            match self
+                .sync_compose_file(owner, repo, github_path, &local_rel, sha)
+                .await
+            {
                 Ok((old, new)) => {
                     to_restart.extend(diff_services(&old, new, self.allow_latest))
                 }
-                Err(e) => tracing::warn!("Failed to sync {file_path}: {e:?}"),
+                Err(e) => tracing::warn!("Failed to sync {github_path}: {e:?}"),
             }
         }
 
@@ -198,31 +213,40 @@ impl DeploymentOrchestrator {
 
     // ── internals ─────────────────────────────────────────────────────────────
 
+    fn strip_repo_prefix<'a>(&self, github_path: &'a str) -> Option<&'a str> {
+        strip_repo_prefix_inner(self.repo_path_prefix.as_deref(), github_path)
+    }
+
     /// Fetch the file at `sha` from GitHub, write it locally, and return
     /// (old_services, new_services) for diffing.
     ///
+    /// `github_path` is the path in the repository (used for the API call).
+    /// `local_rel` is the path relative to `root_dir` where the file is written
+    /// (already stripped of any `REPO_PATH_PREFIX` by the caller).
+    ///
     /// Uses an atomic write (temp file → rename) so a parse failure on the
     /// new content never corrupts the existing local file.
-    #[tracing::instrument(skip(self), fields(owner, repo, file_path, sha))]
+    #[tracing::instrument(skip(self), fields(owner, repo, github_path, sha))]
     async fn sync_compose_file(
         &self,
         owner: &str,
         repo: &str,
-        file_path: &str,
+        github_path: &str,
+        local_rel: &str,
         sha: &str,
     ) -> Result<(Vec<ServiceEntry>, Vec<ServiceEntry>)> {
         // Reject paths with parent-dir components before joining with root_dir.
         // PathBuf::join does not resolve ".." so "../../etc/passwd" would escape
         // the root directory. This is defense-in-depth — HMAC verification
         // already gates who can send webhooks.
-        if std::path::Path::new(file_path)
+        if std::path::Path::new(local_rel)
             .components()
             .any(|c| c == std::path::Component::ParentDir)
         {
-            return Err(eyre!("Rejected suspicious file path: {file_path:?}"));
+            return Err(eyre!("Rejected suspicious file path: {local_rel:?}"));
         }
 
-        let local_path = self.root_dir.join(file_path);
+        let local_path = self.root_dir.join(local_rel);
 
         let old_services = if local_path.exists() {
             crate::fs::walk::parse_yaml_file(&local_path).unwrap_or_default()
@@ -232,7 +256,7 @@ impl DeploymentOrchestrator {
 
         let content = self
             .github_client
-            .fetch_file_content(owner, repo, file_path, sha)
+            .fetch_file_content(owner, repo, github_path, sha)
             .await?;
 
         if let Some(parent) = local_path.parent() {
@@ -325,6 +349,25 @@ impl DeploymentOrchestrator {
 
 // ── pure functions (standalone for testability) ───────────────────────────────
 
+/// Returns the local-relative path for a GitHub repo path, applying the
+/// configured `repo_path_prefix` filter and strip.
+///
+/// - No prefix set → returns the path unchanged.
+/// - Prefix set and path starts with it → returns the stripped remainder.
+/// - Prefix set but path does not match → returns `None` (caller skips).
+fn strip_repo_prefix_inner<'a>(
+    prefix: Option<&str>,
+    github_path: &'a str,
+) -> Option<&'a str> {
+    match prefix {
+        None => Some(github_path),
+        Some(p) => {
+            let stripped = github_path.strip_prefix(p)?;
+            Some(stripped.trim_start_matches('/'))
+        }
+    }
+}
+
 /// Compare old vs new service configs. Returns services that changed and pass
 /// the tag policy. Services that fail policy are warned and dropped.
 pub(crate) fn diff_services(
@@ -413,6 +456,46 @@ mod tests {
             image: image.to_string(),
             raw_config: serde_yaml::from_str(raw_yaml).unwrap(),
         }
+    }
+
+    // ── strip_repo_prefix ─────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_prefix_none_passes_through() {
+        assert_eq!(
+            strip_repo_prefix_inner(None, "a/b/compose.yaml"),
+            Some("a/b/compose.yaml")
+        );
+    }
+
+    #[test]
+    fn strip_prefix_matching_strips_and_trims_slash() {
+        assert_eq!(
+            strip_repo_prefix_inner(
+                Some("baremetals/node1"),
+                "baremetals/node1/myapp/compose.yaml"
+            ),
+            Some("myapp/compose.yaml")
+        );
+    }
+
+    #[test]
+    fn strip_prefix_non_matching_returns_none() {
+        assert_eq!(
+            strip_repo_prefix_inner(
+                Some("baremetals/node1"),
+                "baremetals/node2/app/compose.yaml"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn strip_prefix_exact_match_returns_empty_str() {
+        assert_eq!(
+            strip_repo_prefix_inner(Some("baremetals/node1"), "baremetals/node1"),
+            Some("")
+        );
     }
 
     // ── check_tag_policy ─────────────────────────────────────────────────────

@@ -25,6 +25,12 @@ pub struct Config {
 
     /// Whether to run in webhook or polling mode.
     pub mode: Mode,
+
+    /// Only process files whose repo path starts with this prefix.
+    /// The prefix is stripped when constructing the local path, so
+    /// `baremetals/node1/myapp/compose.yaml` with prefix `baremetals/node1`
+    /// writes to `ROOT_DIR/myapp/compose.yaml`.
+    pub repo_path_prefix: Option<String>,
 }
 
 impl Config {
@@ -85,7 +91,9 @@ impl Config {
         };
 
         let github_token = env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty());
-        let api_token = env::var("API_TOKEN").ok();
+        let api_token = env::var("API_TOKEN").ok().filter(|s| !s.is_empty());
+        let repo_path_prefix =
+            env::var("REPO_PATH_PREFIX").ok().filter(|s| !s.is_empty());
 
         let allow_latest_images = env::var("ALLOW_LATEST_IMAGES")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -106,6 +114,7 @@ impl Config {
             github_token,
             allow_latest_images,
             api_token,
+            repo_path_prefix,
             #[cfg(feature = "otlp")]
             otlp_endpoint,
         })

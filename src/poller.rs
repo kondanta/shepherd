@@ -79,6 +79,7 @@ impl Poller {
             .await?;
 
         if head.is_empty() {
+            tracing::debug!("No commits found in repository");
             return Ok(()); // empty or inaccessible repo
         }
 
@@ -86,14 +87,15 @@ impl Poller {
         // the same commits to be re-processed on every subsequent poll.
         *self.last_sha.lock().await = Some(head);
 
-        if last.is_none() {
-            tracing::info!("Poller initialized; waiting for new commits");
-            return Ok(());
-        }
-
         if commits.is_empty() {
             tracing::debug!("No new commits");
             return Ok(());
+        }
+
+        if last.is_none() {
+            tracing::info!(
+                "First poll — checking latest commit for pending changes"
+            );
         }
 
         if self.flags.load().deployments_paused {
