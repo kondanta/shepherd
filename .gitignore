@@ -27,3 +27,4 @@ target
 
 # Testing path
 test-path/*
+.env
