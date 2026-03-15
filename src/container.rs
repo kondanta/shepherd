@@ -135,29 +135,51 @@ impl DeploymentOrchestrator {
             return Ok(());
         }
 
-        let modified = payload.modified_compose_files();
+        let modified: Vec<String> =
+            payload.modified_compose_files().into_iter().collect();
         if modified.is_empty() {
             tracing::info!("No compose file changes, skipping");
             return Ok(());
         }
 
-        // Serialize concurrent deployments. The HTTP response is already sent;
-        // this only queues the background work.
+        self.process_push(
+            payload.repository.owner(),
+            payload.repository.repo_name(),
+            &payload.after,
+            &modified,
+        )
+        .await
+    }
+
+    /// Core deploy path: sync changed compose files from GitHub, diff services,
+    /// and restart those that changed.
+    ///
+    /// Acquires the deploy semaphore, so concurrent calls (webhook + poller,
+    /// or two webhook deliveries) are serialized automatically.
+    ///
+    /// Re-entrant by design: if a file is already up to date, `diff_services`
+    /// finds no delta and no restart occurs.
+    #[tracing::instrument(
+        skip(self, modified_files),
+        fields(sha = %sha, repo = %format!("{owner}/{repo}"), count = modified_files.len())
+    )]
+    pub(crate) async fn process_push(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+        modified_files: &[String],
+    ) -> Result<()> {
         let _permit = self
             .deploy_semaphore
             .acquire()
             .await
             .map_err(|_| eyre!("deploy semaphore closed"))?;
 
-        let owner = payload.repository.owner();
-        let repo = payload.repository.repo_name();
         let mut to_restart: Vec<ServiceEntry> = Vec::new();
 
-        for file_path in &modified {
-            match self
-                .sync_compose_file(owner, repo, file_path, &payload.after)
-                .await
-            {
+        for file_path in modified_files {
+            match self.sync_compose_file(owner, repo, file_path, sha).await {
                 Ok((old, new)) => {
                     to_restart.extend(diff_services(&old, new, self.allow_latest))
                 }
@@ -165,19 +187,11 @@ impl DeploymentOrchestrator {
             }
         }
 
-        // Restarts run sequentially. Independent services across different
-        // compose files could theoretically run in parallel, but that would
-        // require `self: Arc<Self>` to satisfy `tokio::spawn`'s `'static`
-        // bound. Sequential is safe and correct for the current scale.
         for service in to_restart {
             if let Err(e) = self.execute_and_record(&service).await {
                 tracing::error!("Failed to update {}: {e:?}", service.name);
             }
         }
-
-        // Duplicate webhook delivery (GitHub retries on timeout) is safe:
-        // a re-delivery finds no config diff because the first delivery
-        // already wrote and deployed — so no redundant restart occurs.
 
         Ok(())
     }

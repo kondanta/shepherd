@@ -1,157 +1,127 @@
 # Shepherd
 
-**Shepherd** is a lightweight automation tool that keeps Docker Compose–based workloads up to date when container images change.
+Shepherd keeps Docker Compose services up to date. When Renovate pushes an image bump to GitHub, the webhook triggers Shepherd to fetch the updated compose file at that commit SHA, write it locally, pull the new image, and restart only the affected service.
 
-It listens for GitHub webhook events (e.g. from Renovate), scans a filesystem for Docker Compose files, detects which service reference updated images, updates them in place, and restarts only the affected services.
+Built for self-hosted environments running Docker Compose on a single host. Not a cluster scheduler, not a UI — just a small daemon that automates the boring part of keeping images current.
 
-Shepherd is designed for **self-hosted environments** and **homelabs**, not as a general-purpose container platform.
+## How it works
 
+1. Renovate bumps an image version and pushes to your repo
+2. GitHub sends a push webhook to Shepherd
+3. Shepherd verifies the HMAC signature, checks the commit is from Renovate, fetches the changed compose files from GitHub at the exact commit SHA, and diffs them against the local copies
+4. Services whose config changed are pulled and restarted with `docker compose up -d --no-deps`
 
----
+Concurrent webhooks are serialized — the HTTP response is immediate, deploy work is queued. A re-delivered webhook is safe: if the file is already up to date, no restart happens.
 
-## Status
+## Requirements
 
-🚧 **Early development**
+- Docker Compose v2 (`docker compose`). The legacy `docker-compose` v1 is not supported.
+- A GitHub repository containing your compose files, with a push webhook configured.
+- Renovate (or commits that match the configured author identity).
 
-Core functionality (scanning, parsing, observability) is in place.
-Webhook handling and Docker Compose execution are evolving.
+## Modes
 
+Shepherd runs in one of two modes. Set exactly one:
 
----
+- **Webhook mode** — set `WEBHOOK_SECRET`. GitHub delivers push events to `/webhook/github` via a Cloudflare Tunnel or similar. The webhook endpoint is only registered in this mode.
+- **Polling mode** — set `POLL_REPO`. Shepherd polls the GitHub API on a configurable interval. No public ingress required.
 
-## Why Shepherd?
-
-If you:
-
-* run **multiple Docker Compose workloads** on a single host
-* use **Renovate** to keep images updated
-* want **controlled, observable restarts** without moving to Kubernetes
-
-…Shepherd bridges that gap.
-
----
-
-## How It Works
-
-1. Renovate updates Docker image versions in a repository
-2. GitHub sends a webhook event
-3. Shepherd:
-
-   * scans the configured root directory for `docker-compose.yaml` / `.yml` files
-   * parses services and image references
-   * identifies services using updated images
-   * updates the image fields in place
-   * restarts only the affected services using `docker compose`
-4. Metrics and traces are emitted for observability
-
----
-
-## Features
-
-* 🔍 Recursive discovery of Docker Compose files
-* 🐳 Service and image extraction
-* ✏️ In-place image updates
-* ▶️ Targeted service restarts (no full stack restarts)
-* 📊 Metrics:
-
-  * services restarted
-  * successful updates
-  * failed updates
-  * scan errors
-* 🧾 Structured logging via `tracing`
-* 🔎 Optional OpenTelemetry tracing
-
----
-
-## Assumptions & Constraints
-
-Shepherd is intentionally opinionated:
-
-* **Only supports `docker compose`**
-
-  * `docker-compose` (v1) is **not supported**
-* **Filesystem-based**
-
-  * No Docker API orchestration
-* **Single-host focus**
-
-  * Not a cluster scheduler
-* **Idempotent by design**
-
-  * Re-running does not cause unnecessary restarts
-
----
+Setting both or neither is a startup error.
 
 ## Configuration
 
-Configuration is environment-based.
-A `.env` file is optional but supported.
+All configuration is via environment variables. A `.env` file is loaded if present.
 
-### Required
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ROOT_DIR` | yes | — | Directory to scan for compose files |
+| `WEBHOOK_SECRET` | one of | — | GitHub webhook secret (webhook mode) |
+| `POLL_REPO` | one of | — | `owner/repo` to poll (polling mode) |
+| `POLL_INTERVAL_SECS` | no | `300` | How often to poll, in seconds |
+| `POLL_BRANCH` | no | `main` | Branch to poll |
+| `GITHUB_TOKEN` | no | — | GitHub PAT; avoids rate limiting when fetching files |
+| `RENOVATE_USERNAME` | no | `renovate[bot]` | Commit author username to match |
+| `RENOVATE_EMAIL` | no | `renovate[bot]@users.noreply.github.com` | Commit author email to match |
+| `ALLOW_LATEST_IMAGES` | no | `false` | Allow services tagged `latest` to be deployed |
+| `API_TOKEN` | no | — | Bearer token required for `/flags/*` endpoints |
+| `LOG_LEVEL` | no | `info` | One of `trace`, `debug`, `info`, `warn`, `error` |
+| `OTLP_ENDPOINT` | no | — | gRPC endpoint for traces; required with `--features otlp` |
 
-* `ROOT_DIR`
-  Root directory to scan for Docker Compose files.
+## Running
 
-### Optional
-
-* `LOG_LEVEL`
-  Log level (`info` by default).
-
-* `OTLP_ENDPOINT`
-  Required **only** when built with the `otlp` feature.
-
-Example:
-
-```env
-ROOT_DIR=/srv/compose
-LOG_LEVEL=info
-OTLP_ENDPOINT=http://localhost:4317
+```bash
+shepherd serve --port 8080
 ```
 
----
+**Docker:** Shepherd needs the Docker socket and your compose files. The compose files must be mounted at the same absolute path they have on the host — `ROOT_DIR` is used both to find files and as the working directory for `docker compose` commands.
+
+```yaml
+services:
+  shepherd:
+    image: ghcr.io/yourusername/shepherd:latest
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/compose:/srv/compose
+    environment:
+      ROOT_DIR: /srv/compose
+      WEBHOOK_SECRET: your-secret
+```
+
+See `docker-compose.example.yml` for a complete example.
+
+## API
+
+**Webhook** *(webhook mode only)*
+
+`POST /webhook/github` — receives GitHub push events. Requires a valid `X-Hub-Signature-256` header. This endpoint is not registered in polling mode.
+
+**Services**
+
+`GET /list-services` — lists all services discovered under `ROOT_DIR`.
+
+`GET /deployments` — deployment history, newest first, capped at 200 entries.
+
+`POST /deploy` — manually trigger a deploy for a named service.
+```json
+{"service": "myapp"}
+```
+
+**Health**
+
+`GET /healthz` — liveness probe. Returns 200 if `ROOT_DIR` is accessible.
+
+`GET /readyz` — readiness probe. Returns 200 if `ROOT_DIR` is accessible and `docker compose` is available.
+
+**Flags**
+
+All `/flags/*` endpoints require `Authorization: Bearer <API_TOKEN>`.
+
+`GET /flags` — current flag state.
+
+`POST /flags/pause` / `POST /flags/resume` — pause or resume webhook-triggered deployments.
+
+`POST /flags/dry-run/enable` / `POST /flags/dry-run/disable` — log what would happen without executing.
 
 ## Observability
 
-### Logging
+Structured JSON logs via `tracing`. Level controlled by `LOG_LEVEL`.
 
-* Powered by `tracing`
-* Default log level: `info`
-* Noisy dependencies are filtered out
+Build with `--features metrics` to expose a Prometheus `/metrics` endpoint.
 
-### Tracing (Optional)
+Build with `--features otlp` to export traces over OTLP/gRPC (e.g. to Grafana Tempo). Requires `OTLP_ENDPOINT`.
 
-When built with the `otlp` feature:
+Both features can be combined: `--features metrics,otlp`.
 
-* Traces are exported using **OTLP over gRPC**
-* HTTP-based OTLP exporters are **not supported**
-* Intended for backends like **Grafana Tempo**
-
-Build with tracing enabled:
+## Building
 
 ```bash
-cargo run --features otlp -- serve
+cargo build --release
 ```
 
----
+Static musl binary for Linux:
+```bash
+cargo build --release --target x86_64-unknown-linux-musl
+```
 
-## Endpoints
-
-* `GET /scan`
-  Scans the filesystem and reports discovered services.
-
-* `GET /metrics`
-  Exposes runtime metrics (available when OTLP is enabled).
-
----
-
-## Non-Goals
-
-Shepherd is **not**:
-
-* a replacement for Kubernetes
-* a UI-driven container manager
-* a multi-host orchestrator
-
-If you want those, use Portainer, Komodo or Kubernetes.
-
-If you want **simple, observable automation for Docker Compose**, Shepherd exists.
+Pre-built binaries and a multi-arch Docker image are published on each tagged release.

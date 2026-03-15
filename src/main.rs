@@ -7,6 +7,7 @@ mod container;
 mod features;
 mod fs;
 mod metrics;
+mod poller;
 mod routes;
 mod tracing_setup;
 
@@ -71,6 +72,19 @@ async fn serve(
         });
 
     let state = AppState { config, orchestrator: Arc::new(orchestrator), flags };
+
+    match &state.config.mode {
+        config::Mode::Poll { repo, interval_secs, .. } => {
+            let p = poller::Poller::new(
+                Arc::clone(&state.orchestrator),
+                state.flags.clone(),
+                &state.config,
+            );
+            tracing::info!(repo = %repo, interval_secs, "Polling mode active");
+            tokio::spawn(async move { p.run().await });
+        }
+        config::Mode::Webhook { .. } => {}
+    }
 
     tracing::info!("Starting shepherd on {addr}");
 

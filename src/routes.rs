@@ -41,22 +41,27 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/flags/resume", post(resume_deployments))
         .route("/flags/dry-run/enable", post(enable_dry_run))
         .route("/flags/dry-run/disable", post(disable_dry_run))
-        .layer(middleware::from_fn_with_state(state.clone(), require_api_token));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_api_token));
 
     #[cfg(feature = "metrics")]
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
+
+    let webhook_router = match state.config.mode {
+        crate::config::Mode::Webhook { .. } => axum::Router::new().route(
+            "/webhook/github",
+            post(github_webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
+        ),
+        crate::config::Mode::Poll { .. } => axum::Router::new(),
+    };
 
     let app = axum::Router::new()
         .route("/", get(root))
         .route("/healthz", get(health_check))
         .route("/readyz", get(readiness_check))
         .route("/list-services", get(list_managed_services))
-        .route(
-            "/webhook/github",
-            post(github_webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
-        )
         .route("/deployments", get(list_deployments))
         .route("/deploy", post(manual_deploy))
+        .merge(webhook_router)
         .merge(flags_router);
 
     #[cfg(feature = "metrics")]
@@ -258,7 +263,15 @@ pub async fn github_webhook(
             }
         };
 
-    if !verify_github_signature(&state.config.webhook_secret, &body, &signature) {
+    let secret = match &state.config.mode {
+        crate::config::Mode::Webhook { secret } => secret.as_str(),
+        crate::config::Mode::Poll { .. } => {
+            tracing::error!("Webhook handler reached in polling mode");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    if !verify_github_signature(secret, &body, &signature) {
         tracing::warn!("Invalid webhook signature");
         crate::metrics::webhook_received("signature_invalid");
         return StatusCode::UNAUTHORIZED;

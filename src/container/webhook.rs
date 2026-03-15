@@ -72,21 +72,39 @@ impl WebhookEvent {
     }
 }
 
+/// Returns true if the commit author matches the expected Renovate identity.
+///
+/// Checks (in order): GitHub login, display name (case-insensitive), email
+/// substring (case-insensitive). The email substring check handles self-hosted
+/// Renovate variants that use a domain-prefixed address.
+pub(crate) fn is_renovate_author(
+    login: Option<&str>,
+    name: &str,
+    email: &str,
+    expected_username: &str,
+    expected_email: &str,
+) -> bool {
+    login.is_some_and(|l| l.eq_ignore_ascii_case(expected_username))
+        || name.eq_ignore_ascii_case(expected_username)
+        || email.to_lowercase().contains(&expected_email.to_lowercase())
+}
+
 impl WebhookPayload {
     /// Check if this push is to the default branch (usually main/master).
     pub fn is_default_branch(&self) -> bool {
         self.git_ref == format!("refs/heads/{}", self.repository.default_branch)
     }
 
-    /// Check if this looks like a Renovate commit.
-    /// Prefers exact match on the GitHub `username` field; falls back to
-    /// case-insensitive name equality and email substring for self-hosted
-    /// Renovate variants where the username field may differ.
+    /// Check if any commit in this push looks like a Renovate commit.
     pub fn is_renovate_commit(&self, username: &str, email: &str) -> bool {
         self.commits.iter().any(|c| {
-            c.author.username.as_deref() == Some(username)
-                || c.author.name.eq_ignore_ascii_case(username)
-                || c.author.email.to_lowercase().contains(email)
+            is_renovate_author(
+                c.author.username.as_deref(),
+                &c.author.name,
+                &c.author.email,
+                username,
+                email,
+            )
         })
     }
 

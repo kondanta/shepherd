@@ -1,6 +1,52 @@
 use color_eyre::Result;
 use eyre::eyre;
+use serde::Deserialize;
 use std::time::Duration;
+
+/// A commit returned by the polling API.
+pub struct PollCommit {
+    pub sha: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// GitHub login (e.g. `renovate[bot]`), absent for unregistered committers.
+    pub author_login: Option<String>,
+}
+
+// ── private serde types for GitHub REST API responses ────────────────────────
+
+#[derive(Deserialize)]
+struct ApiCommitItem {
+    sha: String,
+    commit: ApiCommitMeta,
+    /// Top-level author object (GitHub user); may be null.
+    author: Option<ApiGitHubUser>,
+}
+
+#[derive(Deserialize)]
+struct ApiCommitMeta {
+    author: ApiCommitAuthor,
+}
+
+#[derive(Deserialize)]
+struct ApiCommitAuthor {
+    name: String,
+    email: String,
+}
+
+#[derive(Deserialize)]
+struct ApiGitHubUser {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct ApiCommitDetail {
+    files: Option<Vec<ApiCommitFile>>,
+}
+
+#[derive(Deserialize)]
+struct ApiCommitFile {
+    filename: String,
+}
 
 pub struct GitHubClient {
     client: reqwest::Client,
@@ -52,6 +98,120 @@ impl GitHubClient {
         }
 
         Err(last_err.unwrap())
+    }
+
+    // ── polling API ───────────────────────────────────────────────────────────
+
+    /// Returns `(head_sha, new_commits_oldest_first)`.
+    ///
+    /// Pass `since_sha = None` on first call to initialise without deploying.
+    /// Pass the previously returned `head_sha` on subsequent calls to get only
+    /// commits that arrived since the last poll.
+    #[tracing::instrument(skip(self), fields(owner, repo, branch))]
+    pub async fn commits_since(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        since_sha: Option<&str>,
+    ) -> Result<(String, Vec<PollCommit>)> {
+        let url = format!(
+            "https://api.github.com/repos/{owner}/{repo}/commits\
+             ?sha={branch}&per_page=100"
+        );
+        let items: Vec<ApiCommitItem> = self.api_get(&url).await?;
+
+        let head_sha = items.first().map(|c| c.sha.clone()).unwrap_or_default();
+
+        let Some(base) = since_sha else {
+            return Ok((head_sha, vec![]));
+        };
+
+        let pos = items.iter().position(|c| c.sha == base);
+        let new_items: &[ApiCommitItem] = match pos {
+            Some(p) => &items[..p],
+            None => {
+                if !items.is_empty() {
+                    tracing::warn!(
+                        "Last-known SHA {base} not found in the last {} \
+                         commits; some commits may have been missed",
+                        items.len()
+                    );
+                }
+                &items[..]
+            }
+        };
+
+        let commits = new_items
+            .iter()
+            .rev()
+            .map(|c| PollCommit {
+                sha: c.sha.clone(),
+                author_name: c.commit.author.name.clone(),
+                author_email: c.commit.author.email.clone(),
+                author_login: c.author.as_ref().map(|u| u.login.clone()),
+            })
+            .collect();
+
+        Ok((head_sha, commits))
+    }
+
+    /// Returns the filenames changed by a single commit.
+    #[tracing::instrument(skip(self), fields(owner, repo, sha))]
+    pub async fn get_commit_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> Result<Vec<String>> {
+        let url =
+            format!("https://api.github.com/repos/{owner}/{repo}/commits/{sha}");
+        let detail: ApiCommitDetail = self.api_get(&url).await?;
+        Ok(detail
+            .files
+            .unwrap_or_default()
+            .into_iter()
+            .map(|f| f.filename)
+            .collect())
+    }
+
+    /// Thin wrapper around the GitHub REST API. Handles auth and JSON parsing.
+    async fn api_get<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
+        let mut request = self
+            .client
+            .get(url)
+            .header("User-Agent", "shepherd")
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+
+        if let Some(token) = &self.token {
+            request = request.header("Authorization", format!("token {token}"));
+        }
+
+        let response = request.send().await.map_err(color_eyre::Report::from)?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let hint = match status {
+                s if s == reqwest::StatusCode::UNAUTHORIZED => {
+                    " — check GITHUB_TOKEN (missing, expired, or wrong account)"
+                }
+                s if s == reqwest::StatusCode::FORBIDDEN
+                    || s == reqwest::StatusCode::TOO_MANY_REQUESTS =>
+                {
+                    " — rate limited; set GITHUB_TOKEN or increase POLL_INTERVAL_SECS"
+                }
+                s if s == reqwest::StatusCode::NOT_FOUND => {
+                    " — repo not found; check POLL_REPO and that GITHUB_TOKEN has read access"
+                }
+                _ => "",
+            };
+            return Err(eyre!("GitHub API error: HTTP {status}{hint}"));
+        }
+
+        let text = response.text().await.map_err(color_eyre::Report::from)?;
+        serde_json::from_str(&text)
+            .map_err(|e| eyre!("GitHub API response parse error: {e}"))
     }
 
     /// Returns `Ok(content)` on success, `Err((error, retriable))` on failure.
