@@ -53,7 +53,6 @@ impl DockerClient {
         compose_file: &Path,
         service_name: &str,
     ) -> Result<()> {
-
         let compose_dir = compose_file.parent().ok_or_else(|| {
             eyre!("Failed to get parent directory of compose file")
         })?;
