@@ -41,7 +41,10 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/flags/resume", post(resume_deployments))
         .route("/flags/dry-run/enable", post(enable_dry_run))
         .route("/flags/dry-run/disable", post(disable_dry_run))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_api_token));
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_token,
+        ));
 
     #[cfg(feature = "metrics")]
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
