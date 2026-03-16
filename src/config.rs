@@ -26,6 +26,10 @@ pub struct Config {
     /// Whether to run in webhook or polling mode.
     pub mode: Mode,
 
+    /// If set, only these service names are eligible for deployment.
+    /// Services not in the list are ignored even if their config changed.
+    pub service_filter: Option<Vec<String>>,
+
     /// Only process files whose repo path starts with this prefix.
     /// The prefix is stripped when constructing the local path, so
     /// `baremetals/node1/myapp/compose.yaml` with prefix `baremetals/node1`
@@ -94,6 +98,13 @@ impl Config {
         let api_token = env::var("API_TOKEN").ok().filter(|s| !s.is_empty());
         let repo_path_prefix =
             env::var("REPO_PATH_PREFIX").ok().filter(|s| !s.is_empty());
+        let service_filter =
+            env::var("SERVICE_FILTER").ok().filter(|s| !s.is_empty()).map(|s| {
+                s.split(',')
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty())
+                    .collect::<Vec<_>>()
+            });
 
         let allow_latest_images = env::var("ALLOW_LATEST_IMAGES")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
@@ -114,6 +125,7 @@ impl Config {
             github_token,
             allow_latest_images,
             api_token,
+            service_filter,
             repo_path_prefix,
             #[cfg(feature = "otlp")]
             otlp_endpoint,
