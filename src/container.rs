@@ -99,19 +99,45 @@ impl DeploymentOrchestrator {
         Ok(self.get_managed_services()?.into_iter().find(|s| s.name == name))
     }
 
-    /// Validate tag policy then pull + restart. Used by the manual deploy path.
+    /// Pull and restart a service, optionally overriding the image.
     ///
-    /// Acquires the same deployment semaphore as `handle_webhook` to prevent
-    /// a manual trigger from racing with an in-progress webhook deployment.
-    pub async fn deploy_service(&self, service: &ServiceEntry) -> Result<()> {
-        let image_ref = ImageReference::parse(&service.image)?;
-        check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
+    /// If `image` is provided the compose file is updated on disk before
+    /// deploying, so the new tag persists across restarts. Acquires the same
+    /// deployment semaphore as `handle_webhook` to prevent races.
+    pub async fn deploy_service(
+        &self,
+        service: &ServiceEntry,
+        image: Option<String>,
+    ) -> Result<()> {
+        let service = match image {
+            Some(img) => {
+                let image_ref = ImageReference::parse(&img)?;
+                check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
+                crate::fs::walk::write_service_image(
+                    &service.path,
+                    &service.name,
+                    &img,
+                )
+                .wrap_err("Failed to update image in compose file")?;
+                tracing::info!(
+                    service = %service.name,
+                    image = %img,
+                    "Updated compose file with new image for manual deploy"
+                );
+                ServiceEntry { image: img, ..service.clone() }
+            }
+            None => {
+                let image_ref = ImageReference::parse(&service.image)?;
+                check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
+                service.clone()
+            }
+        };
         let _permit = self
             .deploy_semaphore
             .acquire()
             .await
             .map_err(|_| eyre!("deploy semaphore closed"))?;
-        self.execute_and_record(service).await
+        self.execute_and_record(&service).await
     }
 
     /// Process a GitHub push webhook.

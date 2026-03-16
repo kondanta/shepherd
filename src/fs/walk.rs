@@ -41,6 +41,45 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
     Ok(results)
 }
 
+/// Update the `image:` field of a single service in a compose file in-place.
+///
+/// Uses an atomic write (temp file → rename) so a failure never corrupts
+/// the existing file. Returns an error if the service or its image field
+/// is not found.
+pub fn write_service_image(
+    path: &Path,
+    service_name: &str,
+    new_image: &str,
+) -> Result<()> {
+    let content =
+        fs::read_to_string(path).wrap_err_with(|| format!("Reading {path:?}"))?;
+
+    let mut yaml: Value = serde_yaml::from_str(&content)
+        .wrap_err_with(|| format!("Parsing {path:?}"))?;
+
+    let svc =
+        yaml.get_mut("services").and_then(|s| s.get_mut(service_name)).ok_or_else(
+            || eyre::eyre!("Service '{service_name}' not found in {path:?}"),
+        )?;
+
+    let image_val = svc.get_mut("image").ok_or_else(|| {
+        eyre::eyre!("No 'image' field for service '{service_name}' in {path:?}")
+    })?;
+
+    *image_val = Value::String(new_image.to_string());
+
+    let new_content =
+        serde_yaml::to_string(&yaml).wrap_err("Serializing updated compose file")?;
+
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, new_content.as_bytes())
+        .wrap_err_with(|| format!("Writing temp file {tmp:?}"))?;
+    fs::rename(&tmp, path)
+        .wrap_err_with(|| format!("Renaming {tmp:?} → {path:?}"))?;
+
+    Ok(())
+}
+
 pub(crate) fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
     let content = fs::read_to_string(path)
         .wrap_err_with(|| format!("Reading file {path:?}"))?;

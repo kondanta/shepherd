@@ -333,6 +333,10 @@ pub async fn list_deployments(
 #[derive(serde::Deserialize)]
 pub struct ManualDeployRequest {
     pub service: String,
+    /// Override the image to deploy. If set, the compose file is updated on
+    /// disk before restarting — useful for rollbacks or pinning a specific tag.
+    /// If omitted, re-deploys whatever image is currently in the compose file.
+    pub image: Option<String>,
 }
 
 pub async fn manual_deploy(
@@ -359,7 +363,7 @@ pub async fn manual_deploy(
         }
     };
 
-    match state.orchestrator.deploy_service(&service).await {
+    match state.orchestrator.deploy_service(&service, req.image).await {
         Ok(()) => StatusCode::OK,
         Err(e) => {
             tracing::error!("Manual deploy of '{}' failed: {e:?}", req.service);
