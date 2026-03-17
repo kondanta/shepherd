@@ -11,11 +11,11 @@ env:
 
 jobs:
   # ── Static binary build ──────────────────────────────────────────────────────
-  # Each architecture builds natively — no QEMU, no cross-compilation.
-  # The produced binaries are fully static (musl) and have no runtime
-  # dependencies other than the Linux kernel.
+  # amd64 and arm64 build natively on GitHub-hosted runners (no QEMU, no cross).
+  # armv7 cross-compiles on ubuntu-latest using the `cross` tool (Docker-based).
+  # All binaries are fully static musl with no runtime dependencies.
   build-binary:
-    name: Binary (${{ matrix.target }})
+    name: Binary (${{ matrix.artifact }})
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -23,9 +23,15 @@ jobs:
           - target: x86_64-unknown-linux-musl
             runner: ubuntu-latest
             artifact: shepherd-linux-amd64
+            cross: false
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
             artifact: shepherd-linux-arm64
+            cross: false
+          - target: armv7-unknown-linux-musleabihf
+            runner: ubuntu-latest
+            artifact: shepherd-linux-armv7
+            cross: true
 
     steps:
       - uses: actions/checkout@v4
@@ -35,16 +41,26 @@ jobs:
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      - name: Install musl tools
+      - name: Install musl tools (native builds)
+        if: ${{ !matrix.cross }}
         run: sudo apt-get install -y musl-tools
 
-      - name: Build
+      - name: Install cross (armv7)
+        if: ${{ matrix.cross }}
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (native)
+        if: ${{ !matrix.cross }}
         run: cargo build --release --features metrics --target ${{ matrix.target }}
         env:
-          # Ensure the C runtime is linked statically so the binary
-          # runs on any Linux distribution without glibc installed.
           RUSTFLAGS: "-C target-feature=+crt-static"
+
+      - name: Build (cross)
+        if: ${{ matrix.cross }}
+        run: cross build --release --features metrics --target ${{ matrix.target }}
 
       - name: Stage artifact
         run: |
@@ -77,12 +93,12 @@ jobs:
           files: |
             shepherd-linux-amd64
             shepherd-linux-arm64
+            shepherd-linux-armv7
 
   # ── Docker image ─────────────────────────────────────────────────────────────
-  # Downloads the pre-built binaries from the binary job and injects them into
-  # the Docker image — no compilation happens here. QEMU is registered only to
-  # satisfy buildx's platform awareness; the actual work per platform is just
-  # a COPY of the right binary, which runs natively on the builder.
+  # Downloads the pre-built binaries and injects them into the image — no
+  # compilation here. QEMU is registered only to satisfy buildx's platform
+  # awareness; each platform just COPYs the right pre-built binary.
   build-docker:
     name: Docker image
     needs: build-binary
@@ -99,7 +115,7 @@ jobs:
           merge-multiple: true
 
       - name: Mark binaries executable
-        run: chmod +x shepherd-linux-amd64 shepherd-linux-arm64
+        run: chmod +x shepherd-linux-amd64 shepherd-linux-arm64 shepherd-linux-armv7
 
       - uses: docker/setup-qemu-action@v3
 
@@ -127,7 +143,7 @@ jobs:
           context: .
           file: Dockerfile.release
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

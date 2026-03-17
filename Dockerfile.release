@@ -1,16 +1,27 @@
 # Used by the GitHub Actions release workflow to produce the multi-arch
 # Docker image without recompiling Rust. The binaries are built natively
-# on each platform in the build-binary job and injected here.
+# (amd64, arm64) or via cross-compilation (armv7) in the build-binary job
+# and injected here.
 #
 # For local development use `Dockerfile` instead — it compiles from source.
 
 FROM docker:cli@sha256:067c301efe497cd5d174d468b7b3422a485ae4aca8f7ec1ffd4655c9fa383af2
 
-# TARGETARCH is set automatically by docker buildx to "amd64" or "arm64".
+# TARGETARCH is set by buildx: "amd64", "arm64", or "arm".
+# TARGETVARIANT distinguishes arm sub-architectures: "v7", "v6", etc.
 ARG TARGETARCH
+ARG TARGETVARIANT
 
-COPY shepherd-linux-${TARGETARCH} /usr/local/bin/shepherd
-RUN chmod +x /usr/local/bin/shepherd
+COPY shepherd-linux-amd64 shepherd-linux-arm64 shepherd-linux-armv7 /tmp/
+
+RUN case "${TARGETARCH}${TARGETVARIANT}" in \
+      "amd64")  cp /tmp/shepherd-linux-amd64  /usr/local/bin/shepherd ;; \
+      "arm64")  cp /tmp/shepherd-linux-arm64  /usr/local/bin/shepherd ;; \
+      "armv7")  cp /tmp/shepherd-linux-armv7  /usr/local/bin/shepherd ;; \
+      *) echo "Unsupported platform: ${TARGETARCH}${TARGETVARIANT}" && exit 1 ;; \
+    esac && \
+    chmod +x /usr/local/bin/shepherd && \
+    rm /tmp/shepherd-linux-*
 
 EXPOSE 8080
 
