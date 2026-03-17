@@ -43,7 +43,7 @@ All configuration is via environment variables. A `.env` file is loaded if prese
 | `RENOVATE_USERNAME` | no | `renovate[bot]` | Commit author username to match |
 | `RENOVATE_EMAIL` | no | `renovate[bot]@users.noreply.github.com` | Commit author email to match |
 | `REPO_PATH_PREFIX` | no | — | Only handle files under this repo path; strips the prefix when writing locally |
-| `SERVICE_FILTER` | no | — | Comma-separated service names this instance may deploy; unset means all |
+| `SERVICE_FILTER` | no | — | Comma-separated names of services this instance may deploy — these are the keys under `services:` in the compose file, not folder names; unset means all |
 | `ALLOW_LATEST_IMAGES` | no | `false` | Allow services tagged `latest` to be deployed |
 | `API_TOKEN` | no | — | Bearer token required for `/flags/*` endpoints |
 | `LOG_LEVEL` | no | `info` | One of `trace`, `debug`, `info`, `warn`, `error` |

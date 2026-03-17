@@ -314,12 +314,6 @@ impl DeploymentOrchestrator {
             .fetch_file_content(owner, repo, github_path, sha)
             .await?;
 
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .wrap_err_with(|| format!("Creating dirs for {local_path:?}"))?;
-        }
-
         // Parse in memory first — if GitHub sends broken YAML we never touch
         // the local file. Then atomic rename (write to .tmp, rename) ensures
         // the local file is always complete: either the old or the new content.
@@ -327,6 +321,22 @@ impl DeploymentOrchestrator {
             .wrap_err(
                 "New compose file failed to parse; local file left unchanged",
             )?;
+
+        // If a service filter is set and none of the services in this file
+        // match it, skip the write entirely — no point creating files or
+        // directories for services this instance will never deploy.
+        if self.service_filter.is_some()
+            && !new_services.iter().any(|s| self.is_service_allowed(&s.name))
+        {
+            tracing::debug!("Skipping file: no services match SERVICE_FILTER");
+            return Ok((vec![], vec![]));
+        }
+
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .wrap_err_with(|| format!("Creating dirs for {local_path:?}"))?;
+        }
 
         let tmp_path = local_path.with_extension("tmp");
         tokio::fs::write(&tmp_path, content.as_bytes())
