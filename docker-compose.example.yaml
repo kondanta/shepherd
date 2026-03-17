@@ -19,7 +19,7 @@
 
 services:
   shepherd:
-    image: ghcr.io/your-org/shepherd:latest
+    image: ghcr.io/kondanta/shepherd:latest
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -33,27 +33,64 @@ services:
       # Required: directory shepherd scans for compose files.
       ROOT_DIR: /opt/services
 
-      # Required: shared secret for GitHub webhook verification.
+      # ── Mode (pick one) ────────────────────────────────────────────────────
+
+      # Webhook mode: shared secret for GitHub webhook verification.
       # Set the same value in your GitHub repository → Settings → Webhooks.
       WEBHOOK_SECRET: "change-me"
 
-      # Recommended: GitHub token to avoid rate limits when fetching
-      # compose files at the commit SHA. A fine-grained token with
-      # read-only contents access to the target repository is sufficient.
+      # Polling mode: repository to poll instead of receiving webhooks.
+      # Format: owner/repo. Set this instead of WEBHOOK_SECRET.
+      # POLL_REPO: "myorg/my-infra"
+      # POLL_INTERVAL_SECS: "300"   # default: 5 minutes
+      # POLL_BRANCH: "main"         # default: main
+
+      # ── GitHub ─────────────────────────────────────────────────────────────
+
+      # Recommended: GitHub token to avoid rate limits when fetching compose
+      # files. A fine-grained token with read-only contents access is enough.
+      # Required for polling mode on busy repos.
       # GITHUB_TOKEN: "ghp_..."
 
-      # Optional: bearer token protecting the /flags/* endpoints.
-      # If unset, those endpoints return 401.
-      # API_TOKEN: "change-me"
-
       # Optional: Renovate bot identity (defaults shown).
-      # Override if you run a self-hosted Renovate with a custom identity.
+      # Override if you run self-hosted Renovate with a custom identity.
       # RENOVATE_USERNAME: "renovate[bot]"
       # RENOVATE_EMAIL: "renovate[bot]@users.noreply.github.com"
 
+      # ── Path mapping ───────────────────────────────────────────────────────
+
+      # Optional: only handle files under this repo path prefix, and strip
+      # the prefix when writing files locally. Useful when your compose files
+      # live in a subdirectory of a monorepo.
+      #
+      # Example: repo has metal/services/myapp/compose.yaml
+      #   REPO_PATH_PREFIX: "metal/services"
+      #   ROOT_DIR: /opt/services
+      # → writes to /opt/services/myapp/compose.yaml
+      # REPO_PATH_PREFIX: ""
+
+      # ── Deployment behaviour ───────────────────────────────────────────────
+
+      # Optional: comma-separated list of service names this instance may
+      # deploy. These are the keys under `services:` in the compose file —
+      # NOT folder names. Example: if your compose file has `adguardhome:`
+      # as the service key, use SERVICE_FILTER=adguardhome, not adguard.
+      # If unset, all services are handled.
+      # SERVICE_FILTER: "ghost,invidious"
+
       # Optional: allow services using the 'latest' tag to be deployed.
-      # Defaults to false (latest tag is rejected as unsafe).
+      # Defaults to false (latest tag is rejected).
       # ALLOW_LATEST_IMAGES: "false"
+
+      # Optional: bearer token protecting the /flags/* endpoints (pause,
+      # resume, dry-run). If unset, those endpoints return 401.
+      # API_TOKEN: "change-me"
+
+      # ── Observability ──────────────────────────────────────────────────────
 
       # Optional: log level (trace, debug, info, warn, error). Default: info.
       # LOG_LEVEL: "info"
+
+      # Optional: gRPC endpoint for OpenTelemetry traces.
+      # Only used when shepherd is built with --features otlp.
+      # OTLP_ENDPOINT: "http://tempo:4317"

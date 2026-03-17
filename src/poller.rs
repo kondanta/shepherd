@@ -14,6 +14,7 @@ pub struct Poller {
     interval: Duration,
     renovate_username: String,
     renovate_email: String,
+    repo_path_prefix: Option<String>,
     flags: SharedFlags,
     last_sha: Mutex<Option<String>>,
 }
@@ -48,6 +49,7 @@ impl Poller {
             interval,
             renovate_username: config.renovate_username.clone(),
             renovate_email: config.renovate_email.clone(),
+            repo_path_prefix: config.repo_path_prefix.clone(),
             flags,
             orchestrator,
             last_sha: Mutex::new(None),
@@ -83,19 +85,21 @@ impl Poller {
             return Ok(()); // empty or inaccessible repo
         }
 
-        // Always advance last_sha so a deploy failure doesn't cause
-        // the same commits to be re-processed on every subsequent poll.
-        *self.last_sha.lock().await = Some(head);
+        // Always advance last_sha before doing any work so that a failure
+        // doesn't cause the same commits to be re-processed on every poll.
+        *self.last_sha.lock().await = Some(head.clone());
+
+        if last.is_none() {
+            // First startup: sync the full current state of the repo rather
+            // than replaying commit history. The diff machinery handles
+            // missing files, changed files, and already-current files.
+            tracing::info!(sha = %head, "First poll — syncing repo state from HEAD");
+            return self.sync_from_head(&head).await;
+        }
 
         if commits.is_empty() {
             tracing::debug!("No new commits");
             return Ok(());
-        }
-
-        if last.is_none() {
-            tracing::info!(
-                "First poll — checking latest commit for pending changes"
-            );
         }
 
         if self.flags.load().deployments_paused {
@@ -142,6 +146,33 @@ impl Poller {
         }
 
         Ok(())
+    }
+
+    /// Fetch every YAML file in the repo at `sha` and run them through the
+    /// normal sync + diff path. Used on first startup to bring the local
+    /// filesystem in line with the current repo state.
+    async fn sync_from_head(&self, sha: &str) -> Result<()> {
+        let files =
+            self.github.list_repo_files(&self.owner, &self.repo, sha).await?;
+
+        let prefix = self.repo_path_prefix.as_deref().unwrap_or("");
+        let compose_files: Vec<String> = files
+            .into_iter()
+            .filter(|f| {
+                (prefix.is_empty() || f.starts_with(prefix))
+                    && (f.ends_with(".yaml") || f.ends_with(".yml"))
+            })
+            .collect();
+
+        if compose_files.is_empty() {
+            tracing::info!("No YAML files found in repository");
+            return Ok(());
+        }
+
+        tracing::info!(count = compose_files.len(), "Syncing YAML files from HEAD");
+        self.orchestrator
+            .process_push(&self.owner, &self.repo, sha, &compose_files)
+            .await
     }
 
     fn is_renovate(&self, commit: &crate::container::github::PollCommit) -> bool {

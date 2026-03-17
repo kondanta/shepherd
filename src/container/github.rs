@@ -48,6 +48,19 @@ struct ApiCommitFile {
     filename: String,
 }
 
+#[derive(Deserialize)]
+struct ApiTree {
+    tree: Vec<ApiTreeEntry>,
+    truncated: bool,
+}
+
+#[derive(Deserialize)]
+struct ApiTreeEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
 pub struct GitHubClient {
     client: reqwest::Client,
     token: Option<String>,
@@ -125,13 +138,9 @@ impl GitHubClient {
         let head_sha = items.first().map(|c| c.sha.clone()).unwrap_or_default();
 
         let Some(base) = since_sha else {
-            let head_commit = items.first().map(|c| PollCommit {
-                sha: c.sha.clone(),
-                author_name: c.commit.author.name.clone(),
-                author_email: c.commit.author.email.clone(),
-                author_login: c.author.as_ref().map(|u| u.login.clone()),
-            });
-            return Ok((head_sha, head_commit.into_iter().collect()));
+            // First poll: the caller handles initial sync via list_repo_files,
+            // so return no commits here.
+            return Ok((head_sha, vec![]));
         };
 
         let pos = items.iter().position(|c| c.sha == base);
@@ -179,6 +188,36 @@ impl GitHubClient {
             .unwrap_or_default()
             .into_iter()
             .map(|f| f.filename)
+            .collect())
+    }
+
+    /// Returns every file path (blob) in the repository at the given commit SHA.
+    ///
+    /// Uses the recursive git trees endpoint — one API call for the full tree.
+    /// If the tree is truncated (repos with >100k objects), a warning is logged
+    /// and the partial list is returned.
+    #[tracing::instrument(skip(self), fields(owner, repo, sha))]
+    pub async fn list_repo_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> Result<Vec<String>> {
+        let url = format!(
+            "https://api.github.com/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
+        );
+        let tree: ApiTree = self.api_get(&url).await?;
+        if tree.truncated {
+            tracing::warn!(
+                "Repository tree was truncated; \
+                 some files may be missed on initial sync"
+            );
+        }
+        Ok(tree
+            .tree
+            .into_iter()
+            .filter(|e| e.entry_type == "blob")
+            .map(|e| e.path)
             .collect())
     }
 

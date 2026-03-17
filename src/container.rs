@@ -48,6 +48,7 @@ pub struct DeploymentOrchestrator {
     github_client: GitHubClient,
     root_dir: PathBuf,
     repo_path_prefix: Option<String>,
+    service_filter: Option<Vec<String>>,
     renovate_username: String,
     renovate_email: String,
     allow_latest: bool,
@@ -67,6 +68,7 @@ impl DeploymentOrchestrator {
             github_client: GitHubClient::new(config.github_token.clone()),
             root_dir: PathBuf::from(&config.root_dir),
             repo_path_prefix: config.repo_path_prefix.clone(),
+            service_filter: config.service_filter.clone(),
             renovate_username: config.renovate_username.clone(),
             renovate_email: config.renovate_email.clone(),
             allow_latest: config.allow_latest_images,
@@ -109,6 +111,12 @@ impl DeploymentOrchestrator {
         service: &ServiceEntry,
         image: Option<String>,
     ) -> Result<()> {
+        if !self.is_service_allowed(&service.name) {
+            return Err(eyre!(
+                "Service '{}' is not in SERVICE_FILTER for this instance",
+                service.name
+            ));
+        }
         let service = match image {
             Some(img) => {
                 let image_ref = ImageReference::parse(&img)?;
@@ -221,9 +229,21 @@ impl DeploymentOrchestrator {
                 .sync_compose_file(owner, repo, github_path, &local_rel, sha)
                 .await
             {
-                Ok((old, new)) => {
-                    to_restart.extend(diff_services(&old, new, self.allow_latest))
-                }
+                Ok((old, new)) => to_restart.extend(
+                    diff_services(&old, new, self.allow_latest).into_iter().filter(
+                        |s| {
+                            if self.is_service_allowed(&s.name) {
+                                true
+                            } else {
+                                tracing::debug!(
+                                    service = %s.name,
+                                    "Skipping service not in SERVICE_FILTER"
+                                );
+                                false
+                            }
+                        },
+                    ),
+                ),
                 Err(e) => tracing::warn!("Failed to sync {github_path}: {e:?}"),
             }
         }
@@ -241,6 +261,15 @@ impl DeploymentOrchestrator {
 
     fn strip_repo_prefix<'a>(&self, github_path: &'a str) -> Option<&'a str> {
         strip_repo_prefix_inner(self.repo_path_prefix.as_deref(), github_path)
+    }
+
+    /// Returns true if the service is allowed to be deployed on this instance.
+    /// When no filter is configured, all services are allowed.
+    fn is_service_allowed(&self, name: &str) -> bool {
+        match &self.service_filter {
+            None => true,
+            Some(filter) => filter.iter().any(|f| f.eq_ignore_ascii_case(name)),
+        }
     }
 
     /// Fetch the file at `sha` from GitHub, write it locally, and return
@@ -285,12 +314,6 @@ impl DeploymentOrchestrator {
             .fetch_file_content(owner, repo, github_path, sha)
             .await?;
 
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .wrap_err_with(|| format!("Creating dirs for {local_path:?}"))?;
-        }
-
         // Parse in memory first — if GitHub sends broken YAML we never touch
         // the local file. Then atomic rename (write to .tmp, rename) ensures
         // the local file is always complete: either the old or the new content.
@@ -298,6 +321,22 @@ impl DeploymentOrchestrator {
             .wrap_err(
                 "New compose file failed to parse; local file left unchanged",
             )?;
+
+        // If a service filter is set and none of the services in this file
+        // match it, skip the write entirely — no point creating files or
+        // directories for services this instance will never deploy.
+        if self.service_filter.is_some()
+            && !new_services.iter().any(|s| self.is_service_allowed(&s.name))
+        {
+            tracing::debug!("Skipping file: no services match SERVICE_FILTER");
+            return Ok((vec![], vec![]));
+        }
+
+        if let Some(parent) = local_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .wrap_err_with(|| format!("Creating dirs for {local_path:?}"))?;
+        }
 
         let tmp_path = local_path.with_extension("tmp");
         tokio::fs::write(&tmp_path, content.as_bytes())
