@@ -152,10 +152,8 @@ impl Poller {
     /// normal sync + diff path. Used on first startup to bring the local
     /// filesystem in line with the current repo state.
     async fn sync_from_head(&self, sha: &str) -> Result<()> {
-        let files = self
-            .github
-            .list_repo_files(&self.owner, &self.repo, sha)
-            .await?;
+        let files =
+            self.github.list_repo_files(&self.owner, &self.repo, sha).await?;
 
         let prefix = self.repo_path_prefix.as_deref().unwrap_or("");
         let compose_files: Vec<String> = files
