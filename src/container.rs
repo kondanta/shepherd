@@ -294,9 +294,11 @@ impl DeploymentOrchestrator {
         // PathBuf::join does not resolve ".." so "../../etc/passwd" would escape
         // the root directory. This is defense-in-depth — HMAC verification
         // already gates who can send webhooks.
-        if std::path::Path::new(local_rel)
-            .components()
-            .any(|c| c == std::path::Component::ParentDir)
+        let rel_path = std::path::Path::new(local_rel);
+        if rel_path.is_absolute()
+            || rel_path
+                .components()
+                .any(|c| c == std::path::Component::ParentDir)
         {
             return Err(eyre!("Rejected suspicious file path: {local_rel:?}"));
         }

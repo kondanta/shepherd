@@ -86,7 +86,7 @@ pub(crate) fn is_renovate_author(
 ) -> bool {
     login.is_some_and(|l| l.eq_ignore_ascii_case(expected_username))
         || name.eq_ignore_ascii_case(expected_username)
-        || email.to_lowercase().contains(&expected_email.to_lowercase())
+        || email.eq_ignore_ascii_case(expected_email)
 }
 
 impl WebhookPayload {

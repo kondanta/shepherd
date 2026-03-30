@@ -36,6 +36,9 @@ pub fn router(state: AppState) -> axum::Router {
     }
 
     let flags_router = axum::Router::new()
+        .route("/deploy", post(manual_deploy))
+        .route("/deployments", get(list_deployments))
+        .route("/list-services", get(list_managed_services))
         .route("/flags", get(get_flags))
         .route("/flags/pause", post(pause_deployments))
         .route("/flags/resume", post(resume_deployments))
@@ -61,9 +64,6 @@ pub fn router(state: AppState) -> axum::Router {
         .route("/", get(root))
         .route("/healthz", get(health_check))
         .route("/readyz", get(readiness_check))
-        .route("/list-services", get(list_managed_services))
-        .route("/deployments", get(list_deployments))
-        .route("/deploy", post(manual_deploy))
         .merge(webhook_router)
         .merge(flags_router);
 
