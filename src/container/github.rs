@@ -150,7 +150,10 @@ impl GitHubClient {
                 if !items.is_empty() {
                     tracing::warn!(
                         "Last-known SHA {base} not found in the last {} \
-                         commits; some commits may have been missed",
+                         commits — more than {} commits may have landed \
+                         between polls. Consider reducing POLL_INTERVAL_SECS. \
+                         Processing all visible commits as a best-effort recovery.",
+                        items.len(),
                         items.len()
                     );
                 }

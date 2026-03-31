@@ -87,13 +87,10 @@ impl DeploymentOrchestrator {
     }
 
     pub fn list_deployments(&self) -> Vec<Deployment> {
-        self.history
-            .lock()
-            .expect("history mutex poisoned")
-            .iter()
-            .rev()
-            .cloned()
-            .collect()
+        let history = self.history.lock().expect("history mutex poisoned");
+        let entries: Vec<Deployment> = history.iter().rev().cloned().collect();
+        drop(history);
+        entries
     }
 
     /// Look up a service by name from the current filesystem state.
@@ -247,6 +244,10 @@ impl DeploymentOrchestrator {
                 Err(e) => tracing::warn!("Failed to sync {github_path}: {e:?}"),
             }
         }
+
+        // Deduplicate by service name — a service may appear in multiple
+        // modified compose files within the same push.
+        to_restart.dedup_by(|a, b| a.name == b.name);
 
         for service in to_restart {
             if let Err(e) = self.execute_and_record(&service).await {
