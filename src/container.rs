@@ -296,9 +296,7 @@ impl DeploymentOrchestrator {
         // already gates who can send webhooks.
         let rel_path = std::path::Path::new(local_rel);
         if rel_path.is_absolute()
-            || rel_path
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
+            || rel_path.components().any(|c| c == std::path::Component::ParentDir)
         {
             return Err(eyre!("Rejected suspicious file path: {local_rel:?}"));
         }
