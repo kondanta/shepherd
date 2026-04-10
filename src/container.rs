@@ -80,8 +80,13 @@ impl DeploymentOrchestrator {
 
     // ── public API ────────────────────────────────────────────────────────────
 
-    pub fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
-        let services = crate::fs::walk::scan_filesystem(&self.root_dir)?;
+    pub async fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
+        let root = self.root_dir.clone();
+        let services = tokio::task::spawn_blocking(move || {
+            crate::fs::walk::scan_filesystem(&root)
+        })
+        .await
+        .map_err(|e| eyre!("scan_filesystem task panicked: {e}"))??;
         crate::metrics::set_managed_services(services.len());
         Ok(services)
     }
@@ -94,8 +99,8 @@ impl DeploymentOrchestrator {
     }
 
     /// Look up a service by name from the current filesystem state.
-    pub fn find_service(&self, name: &str) -> Result<Option<ServiceEntry>> {
-        Ok(self.get_managed_services()?.into_iter().find(|s| s.name == name))
+    pub async fn find_service(&self, name: &str) -> Result<Option<ServiceEntry>> {
+        Ok(self.get_managed_services().await?.into_iter().find(|s| s.name == name))
     }
 
     /// Pull and restart a service, optionally overriding the image.
@@ -118,11 +123,13 @@ impl DeploymentOrchestrator {
             Some(img) => {
                 let image_ref = ImageReference::parse(&img)?;
                 check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
-                crate::fs::walk::write_service_image(
-                    &service.path,
-                    &service.name,
-                    &img,
-                )
+                let (path, name, image) =
+                    (service.path.clone(), service.name.clone(), img.clone());
+                tokio::task::spawn_blocking(move || {
+                    crate::fs::walk::write_service_image(&path, &name, &image)
+                })
+                .await
+                .map_err(|e| eyre!("write_service_image task panicked: {e}"))?
                 .wrap_err("Failed to update image in compose file")?;
                 tracing::info!(
                     service = %service.name,

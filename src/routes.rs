@@ -243,7 +243,7 @@ pub struct ManagedServicesResponse {
 pub async fn list_managed_services(
     State(state): State<AppState>,
 ) -> Result<Json<ManagedServicesResponse>, StatusCode> {
-    let services = state.orchestrator.get_managed_services().map_err(|e| {
+    let services = state.orchestrator.get_managed_services().await.map_err(|e| {
         tracing::error!("Failed to get managed services: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
@@ -348,7 +348,7 @@ pub async fn manual_deploy(
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
-    let service = match state.orchestrator.find_service(&req.service) {
+    let service = match state.orchestrator.find_service(&req.service).await {
         Ok(Some(s)) => s,
         Ok(None) => {
             tracing::warn!(
