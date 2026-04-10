@@ -224,18 +224,24 @@ impl GitHubClient {
             .collect())
     }
 
+    /// Attaches the GitHub auth token to a request, if one is configured.
+    fn with_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if let Some(token) = &self.token {
+            req.header("Authorization", format!("token {token}"))
+        } else {
+            req
+        }
+    }
+
     /// Thin wrapper around the GitHub REST API. Handles auth and JSON parsing.
     async fn api_get<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
-        let mut request = self
-            .client
-            .get(url)
-            .header("User-Agent", "shepherd")
-            .header("Accept", "application/vnd.github+json")
-            .header("X-GitHub-Api-Version", "2022-11-28");
-
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("token {token}"));
-        }
+        let request = self.with_auth(
+            self.client
+                .get(url)
+                .header("User-Agent", "shepherd")
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28"),
+        );
 
         let response = request.send().await.map_err(color_eyre::Report::from)?;
 
@@ -272,13 +278,11 @@ impl GitHubClient {
     ) -> Result<String, (color_eyre::Report, bool)> {
         tracing::debug!("Fetching file from GitHub: {}", url);
 
-        let mut request = self.client.get(url);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("token {}", token));
-        }
-
-        let response =
-            request.send().await.map_err(|e| (color_eyre::Report::from(e), true))?; // network error → retry
+        let response = self
+            .with_auth(self.client.get(url))
+            .send()
+            .await
+            .map_err(|e| (color_eyre::Report::from(e), true))?; // network error → retry
 
         let status = response.status();
 

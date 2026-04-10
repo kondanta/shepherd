@@ -43,9 +43,9 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
 
 /// Update the `image:` field of a single service in a compose file in-place.
 ///
-/// Uses an atomic write (temp file → rename) so a failure never corrupts
-/// the existing file. Returns an error if the service or its image field
-/// is not found.
+/// Preserves all comments, blank lines, and formatting by doing a targeted
+/// line replacement rather than a YAML round-trip. Uses an atomic write
+/// (temp file → rename) so a failure never corrupts the existing file.
 pub fn write_service_image(
     path: &Path,
     service_name: &str,
@@ -54,22 +54,24 @@ pub fn write_service_image(
     let content =
         fs::read_to_string(path).wrap_err_with(|| format!("Reading {path:?}"))?;
 
-    let mut yaml: Value = serde_yaml::from_str(&content)
+    // Validate the service and image field exist before touching the file.
+    let yaml: Value = serde_yaml::from_str(&content)
         .wrap_err_with(|| format!("Parsing {path:?}"))?;
+    yaml.get("services")
+        .and_then(|s| s.get(service_name))
+        .and_then(|svc| svc.get("image"))
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "Service '{service_name}' or its image field not found in {path:?}"
+            )
+        })?;
 
-    let svc =
-        yaml.get_mut("services").and_then(|s| s.get_mut(service_name)).ok_or_else(
-            || eyre::eyre!("Service '{service_name}' not found in {path:?}"),
-        )?;
-
-    let image_val = svc.get_mut("image").ok_or_else(|| {
-        eyre::eyre!("No 'image' field for service '{service_name}' in {path:?}")
-    })?;
-
-    *image_val = Value::String(new_image.to_string());
-
-    let new_content =
-        serde_yaml::to_string(&yaml).wrap_err("Serializing updated compose file")?;
+    let new_content = replace_image_in_place(&content, service_name, new_image)
+        .ok_or_else(|| {
+            eyre::eyre!(
+                "Could not locate image line for '{service_name}' in {path:?}"
+            )
+        })?;
 
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, new_content.as_bytes())
@@ -78,6 +80,68 @@ pub fn write_service_image(
         .wrap_err_with(|| format!("Renaming {tmp:?} → {path:?}"))?;
 
     Ok(())
+}
+
+/// Replaces the `image:` line for `service_name` in a compose file string,
+/// preserving all other content byte-for-byte.
+///
+/// Tracks indentation to stay scoped to the correct service block. Returns
+/// `None` only if the image line cannot be found (caller already validated
+/// it exists via YAML parse, so this indicates a format edge case).
+fn replace_image_in_place(
+    content: &str,
+    service_name: &str,
+    new_image: &str,
+) -> Option<String> {
+    let mut out = String::with_capacity(content.len());
+    let mut in_service = false;
+    let mut service_indent: usize = 0;
+    let mut replaced = false;
+
+    for line in content.lines() {
+        if replaced {
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+
+        let stripped = line.trim_start();
+        let indent = line.len() - stripped.len();
+
+        if in_service {
+            // Blank/comment lines don't end the block.
+            if !stripped.is_empty()
+                && !stripped.starts_with('#')
+                && indent <= service_indent
+            {
+                in_service = false;
+            } else if stripped.starts_with("image:") {
+                out.push_str(&line[..indent]);
+                out.push_str("image: ");
+                out.push_str(new_image);
+                out.push('\n');
+                replaced = true;
+                continue;
+            }
+        } else if stripped == format!("{}:", service_name) {
+            in_service = true;
+            service_indent = indent;
+        }
+
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    if !replaced {
+        return None;
+    }
+
+    // Match the original file's trailing-newline behaviour.
+    if !content.ends_with('\n') {
+        out.pop();
+    }
+
+    Some(out)
 }
 
 pub(crate) fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
@@ -128,6 +192,33 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[test]
+    fn replace_image_preserves_comments_and_formatting() {
+        let content = "services:\n  nginx:\n    # web server\n    image: nginx:1.24\n    ports:\n      - '80:80'\n";
+        let result = replace_image_in_place(content, "nginx", "nginx:1.25").unwrap();
+        assert!(result.contains("# web server"), "comment should be preserved");
+        assert!(result.contains("image: nginx:1.25"));
+        assert!(result.contains("ports:"), "other fields should be preserved");
+    }
+
+    #[test]
+    fn replace_image_only_affects_target_service() {
+        let content = "services:\n  web:\n    image: nginx:1.24\n  db:\n    image: postgres:15\n";
+        let result = replace_image_in_place(content, "web", "nginx:1.25").unwrap();
+        assert!(result.contains("image: nginx:1.25"));
+        assert!(result.contains("image: postgres:15"), "other service unchanged");
+    }
+
+    #[test]
+    fn replace_image_preserves_trailing_newline() {
+        let with_newline = "services:\n  svc:\n    image: foo:1\n";
+        let without_newline = "services:\n  svc:\n    image: foo:1";
+        let r1 = replace_image_in_place(with_newline, "svc", "foo:2").unwrap();
+        let r2 = replace_image_in_place(without_newline, "svc", "foo:2").unwrap();
+        assert!(r1.ends_with('\n'));
+        assert!(!r2.ends_with('\n'));
+    }
 
     #[test]
     fn test_scan_filesystem() {

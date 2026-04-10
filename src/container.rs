@@ -340,21 +340,7 @@ impl DeploymentOrchestrator {
             return Ok((vec![], vec![]));
         }
 
-        if let Some(parent) = local_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .wrap_err_with(|| format!("Creating dirs for {local_path:?}"))?;
-        }
-
-        let tmp_path = local_path.with_extension("tmp");
-        tokio::fs::write(&tmp_path, content.as_bytes())
-            .await
-            .wrap_err_with(|| format!("Writing temp file {tmp_path:?}"))?;
-
-        tokio::fs::rename(&tmp_path, &local_path).await.wrap_err_with(|| {
-            format!("Renaming temp file {tmp_path:?} → {local_path:?}")
-        })?;
-
+        write_atomically(&local_path, content.as_bytes()).await?;
         tracing::info!("Updated local compose file: {local_path:?}");
         Ok((old_services, new_services))
     }
@@ -439,6 +425,23 @@ fn strip_repo_prefix_inner<'a>(
             Some(stripped.trim_start_matches('/'))
         }
     }
+}
+
+/// Writes `content` to `path` atomically via a `.tmp` sibling file.
+/// Creates parent directories if they don't exist.
+async fn write_atomically(path: &PathBuf, content: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .wrap_err_with(|| format!("Creating dirs for {path:?}"))?;
+    }
+    let tmp = path.with_extension("tmp");
+    tokio::fs::write(&tmp, content)
+        .await
+        .wrap_err_with(|| format!("Writing temp file {tmp:?}"))?;
+    tokio::fs::rename(&tmp, path)
+        .await
+        .wrap_err_with(|| format!("Renaming {tmp:?} → {path:?}"))
 }
 
 /// Compare old vs new service configs. Returns services that changed and pass
