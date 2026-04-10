@@ -14,7 +14,7 @@ use color_eyre::Result;
 use eyre::{WrapErr, eyre};
 use serde::Serialize;
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -429,7 +429,7 @@ fn strip_repo_prefix_inner<'a>(
 
 /// Writes `content` to `path` atomically via a `.tmp` sibling file.
 /// Creates parent directories if they don't exist.
-async fn write_atomically(path: &PathBuf, content: &[u8]) -> Result<()> {
+async fn write_atomically(path: &Path, content: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
