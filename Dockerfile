@@ -15,7 +15,7 @@ RUN cargo chef cook --release --features metrics --recipe-path recipe.json
 COPY . .
 RUN cargo build --release --features metrics
 
-FROM docker:cli@sha256:0befd75049d8903cd5606879d251bd29ac08758cd33f9c7c74583fc6679b737d
+FROM docker:cli@sha256:2efe7c8e806b35050def6ba1ba0ddad67b521a0a6d37f4910b3d88f11b495d03
 
 COPY --from=builder /app/target/release/shepherd /usr/local/bin/shepherd
 
