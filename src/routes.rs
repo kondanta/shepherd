@@ -171,11 +171,13 @@ pub(crate) async fn health_check(
             (StatusCode::OK, Json(HealthResponse { status: "ok", reason: None }))
         }
         _ => {
-            let reason = format!("ROOT_DIR {root_dir:?} is not accessible");
-            tracing::error!("Liveness check failed: {reason}");
+            tracing::error!("Liveness check failed: ROOT_DIR {root_dir:?} is not accessible");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(HealthResponse { status: "error", reason: Some(reason) }),
+                Json(HealthResponse {
+                    status: "error",
+                    reason: Some("ROOT_DIR is not accessible".to_string()),
+                }),
             )
         }
     }
@@ -215,10 +217,7 @@ pub(crate) async fn readiness_check(
                     error: if root_dir_ok {
                         None
                     } else {
-                        Some(format!(
-                            "ROOT_DIR {:?} is not accessible",
-                            state.config.root_dir
-                        ))
+                        Some("ROOT_DIR is not accessible".to_string())
                     },
                 },
                 docker: ReadyCheck {
