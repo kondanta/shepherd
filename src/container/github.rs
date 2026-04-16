@@ -85,6 +85,10 @@ impl GitHubClient {
         path: &str,
         sha: &str,
     ) -> Result<String> {
+        validate_repo_component(owner, "owner")?;
+        validate_repo_component(repo, "repo")?;
+        validate_sha(sha)?;
+
         let url = format!(
             "https://raw.githubusercontent.com/{}/{}/{}/{}",
             owner, repo, sha, path
@@ -129,6 +133,10 @@ impl GitHubClient {
         branch: &str,
         since_sha: Option<&str>,
     ) -> Result<(String, Vec<PollCommit>)> {
+        validate_repo_component(owner, "owner")?;
+        validate_repo_component(repo, "repo")?;
+        validate_branch(branch)?;
+
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/commits\
              ?sha={branch}&per_page=100"
@@ -183,6 +191,10 @@ impl GitHubClient {
         repo: &str,
         sha: &str,
     ) -> Result<Vec<String>> {
+        validate_repo_component(owner, "owner")?;
+        validate_repo_component(repo, "repo")?;
+        validate_sha(sha)?;
+
         let url =
             format!("https://api.github.com/repos/{owner}/{repo}/commits/{sha}");
         let detail: ApiCommitDetail = self.api_get(&url).await?;
@@ -206,6 +218,10 @@ impl GitHubClient {
         repo: &str,
         sha: &str,
     ) -> Result<Vec<String>> {
+        validate_repo_component(owner, "owner")?;
+        validate_repo_component(repo, "repo")?;
+        validate_sha(sha)?;
+
         let url = format!(
             "https://api.github.com/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
         );
@@ -305,5 +321,86 @@ impl GitHubClient {
         }
 
         response.text().await.map_err(|e| (color_eyre::Report::from(e), true))
+    }
+}
+
+// ── input validation (CWE-22/23/36/99) ───────────────────────────────────────
+
+/// SHA must be 40 or 64 lowercase hex chars (SHA-1 / SHA-256).
+fn validate_sha(sha: &str) -> Result<()> {
+    let valid = (sha.len() == 40 || sha.len() == 64)
+        && sha.chars().all(|c| c.is_ascii_hexdigit());
+    if valid {
+        Ok(())
+    } else {
+        Err(eyre!("Invalid SHA: {sha:?} — must be 40 or 64 hex chars"))
+    }
+}
+
+/// Owner and repo names: alphanumeric, hyphens, dots, underscores. No slashes.
+fn validate_repo_component(value: &str, label: &str) -> Result<()> {
+    let valid = !value.is_empty()
+        && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    if valid {
+        Ok(())
+    } else {
+        Err(eyre!("Invalid {label}: {value:?} — only alphanumeric, hyphens, underscores, dots allowed"))
+    }
+}
+
+/// Branch names may contain slashes (e.g. `feature/foo`) but must not contain
+/// characters that would inject extra URL query parameters or path traversal.
+fn validate_branch(branch: &str) -> Result<()> {
+    let invalid = branch.is_empty()
+        || branch.contains("..")
+        || branch.chars().any(|c| matches!(c, '?' | '&' | '#' | '\0'));
+    if invalid {
+        Err(eyre!("Invalid branch name: {branch:?}"))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+
+    #[test]
+    fn sha_valid() {
+        assert!(validate_sha(&"a".repeat(40)).is_ok());
+        assert!(validate_sha(&"f".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn sha_invalid() {
+        assert!(validate_sha("not-a-sha").is_err());
+        assert!(validate_sha(&"a".repeat(39)).is_err());
+        assert!(validate_sha("../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn repo_component_valid() {
+        assert!(validate_repo_component("my-org", "owner").is_ok());
+        assert!(validate_repo_component("my_repo.git", "repo").is_ok());
+    }
+
+    #[test]
+    fn repo_component_invalid() {
+        assert!(validate_repo_component("org/evil", "owner").is_err());
+        assert!(validate_repo_component("", "owner").is_err());
+        assert!(validate_repo_component("../etc", "repo").is_err());
+    }
+
+    #[test]
+    fn branch_valid() {
+        assert!(validate_branch("main").is_ok());
+        assert!(validate_branch("feature/my-feature").is_ok());
+    }
+
+    #[test]
+    fn branch_invalid() {
+        assert!(validate_branch("").is_err());
+        assert!(validate_branch("branch..evil").is_err());
+        assert!(validate_branch("branch&injected=1").is_err());
     }
 }
