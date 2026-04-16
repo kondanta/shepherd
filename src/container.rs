@@ -395,6 +395,7 @@ impl DeploymentOrchestrator {
         self.docker_client
             .restart_compose_service(&service.path, &service.name)
             .await?;
+        tracing::info!("Service updated successfully: {}", service.name);
         Ok(())
     }
 
