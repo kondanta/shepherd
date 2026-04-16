@@ -340,11 +340,15 @@ fn validate_sha(sha: &str) -> Result<()> {
 /// Owner and repo names: alphanumeric, hyphens, dots, underscores. No slashes.
 fn validate_repo_component(value: &str, label: &str) -> Result<()> {
     let valid = !value.is_empty()
-        && value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
     if valid {
         Ok(())
     } else {
-        Err(eyre!("Invalid {label}: {value:?} — only alphanumeric, hyphens, underscores, dots allowed"))
+        Err(eyre!(
+            "Invalid {label}: {value:?} — only alphanumeric, hyphens, underscores, dots allowed"
+        ))
     }
 }
 
@@ -354,11 +358,7 @@ fn validate_branch(branch: &str) -> Result<()> {
     let invalid = branch.is_empty()
         || branch.contains("..")
         || branch.chars().any(|c| matches!(c, '?' | '&' | '#' | '\0'));
-    if invalid {
-        Err(eyre!("Invalid branch name: {branch:?}"))
-    } else {
-        Ok(())
-    }
+    if invalid { Err(eyre!("Invalid branch name: {branch:?}")) } else { Ok(()) }
 }
 
 #[cfg(test)]

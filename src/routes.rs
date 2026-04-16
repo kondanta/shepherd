@@ -171,7 +171,9 @@ pub(crate) async fn health_check(
             (StatusCode::OK, Json(HealthResponse { status: "ok", reason: None }))
         }
         _ => {
-            tracing::error!("Liveness check failed: ROOT_DIR {root_dir:?} is not accessible");
+            tracing::error!(
+                "Liveness check failed: ROOT_DIR {root_dir:?} is not accessible"
+            );
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(HealthResponse {
