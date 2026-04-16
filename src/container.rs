@@ -254,7 +254,8 @@ impl DeploymentOrchestrator {
 
         // Deduplicate by service name — a service may appear in multiple
         // modified compose files within the same push.
-        to_restart.dedup_by(|a, b| a.name == b.name);
+        let mut seen = std::collections::HashSet::new();
+        to_restart.retain(|s| seen.insert(s.name.clone()));
 
         for service in to_restart {
             if let Err(e) = self.execute_and_record(&service).await {

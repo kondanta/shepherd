@@ -54,7 +54,7 @@ pub fn write_service_image(
     let content =
         fs::read_to_string(path).wrap_err_with(|| format!("Reading {path:?}"))?;
 
-    // Validate the service and image field exist before touching the file.
+    // Parse validation only. We don't use parsed value for writing.
     let yaml: Value = serde_yaml::from_str(&content)
         .wrap_err_with(|| format!("Parsing {path:?}"))?;
     yaml.get("services")
@@ -123,6 +123,7 @@ fn replace_image_in_place(
                 replaced = true;
                 continue;
             }
+        // Matches `service_name` only. Quoted keys are not handled.
         } else if stripped == format!("{}:", service_name) {
             in_service = true;
             service_indent = indent;
