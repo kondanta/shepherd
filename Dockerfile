@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1@sha256:2780b5c3bab67f1f76c781860de469442999ed1a0d7992a5efdf2cffc0e3d769
 
-FROM lukemathwalker/cargo-chef:latest-rust-alpine@sha256:5b2b5c6585c537a2795a477e93ebba85b4a2887e11ee9bddd34ad607e53ccec0 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-alpine@sha256:b4cf4bde0f2609a16edee6c59d6efa7f054f3096473ede4d056a7724ab5d2209 AS chef
 RUN apk add --no-cache musl-dev
 WORKDIR /app
 
