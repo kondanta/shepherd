@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1@sha256:2780b5c3bab67f1f76c781860de469442999ed1a0d7992a5efdf2cffc0e3d769
+# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
 FROM lukemathwalker/cargo-chef:latest-rust-alpine@sha256:b4cf4bde0f2609a16edee6c59d6efa7f054f3096473ede4d056a7724ab5d2209 AS chef
 RUN apk add --no-cache musl-dev
