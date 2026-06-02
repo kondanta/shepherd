@@ -21,6 +21,9 @@ use crate::features::SharedFlags;
 #[cfg(feature = "metrics")]
 use axum_prometheus::PrometheusMetricLayer;
 
+#[cfg(feature = "otlp")]
+use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
@@ -72,6 +75,9 @@ pub fn router(state: AppState) -> axum::Router {
         app.route("/metrics", get(move || async move { metric_handle.render() }))
             .layer(prometheus_layer)
     };
+
+    #[cfg(feature = "otlp")]
+    let app = { app.layer(OtelInResponseLayer).layer(OtelAxumLayer::default()) };
 
     app.with_state(state)
 }
