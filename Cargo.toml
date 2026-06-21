@@ -33,7 +33,7 @@ arc-swap = "1.9.1"
 walkdir = "2.5.0"
 serde_yaml = "0.9.34"
 dotenvy = "0.15.7"
-which = "8.0.2"
+which = "8.0.4"
 hmac = "0.13"
 sha2 = "0.11"
 hex = "0.4"
@@ -45,7 +45,7 @@ metrics = "0.24"
 # opentelemetry_sdk is unconditional because SdkTracerProvider appears in the
 # return type of init_tracing (which main.rs calls unconditionally for flush).
 # Only the exporter and instrumentation crates are gated behind `otlp`.
-opentelemetry_sdk = { version = "0.32.0", features = ["rt-tokio", "trace"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["rt-tokio", "trace"] }
 
 # Optional — only compiled when the `otlp` feature is enabled.
 opentelemetry = { version = "0.32.0", features = [
