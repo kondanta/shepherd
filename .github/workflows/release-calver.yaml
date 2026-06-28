@@ -85,7 +85,6 @@ jobs:
           git push origin "$BRANCH" --force
 
           PR_BODY=$(git cliff --tag "${VERSION}" --unreleased --strip all)
-
           if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q "OPEN"; then
             gh pr edit "$BRANCH" --body "$PR_BODY"
           else
