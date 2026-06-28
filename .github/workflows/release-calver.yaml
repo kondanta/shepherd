@@ -84,12 +84,13 @@ jobs:
           git diff --staged --quiet || git commit -m "chore: release ${VERSION}"
           git push origin "$BRANCH" --force
 
+          PR_BODY=$(git cliff --tag "${VERSION}" --unreleased --strip all)
           if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q "OPEN"; then
-            echo "Release PR already open — branch updated."
+            gh pr edit "$BRANCH" --body "$PR_BODY"
           else
             gh pr create \
               --title "chore: release ${VERSION}" \
-              --body "$(printf '## Release %s\n\nMerge to cut the `%s` release.' "$VERSION" "$VERSION")" \
+              --body "$PR_BODY" \
               --base main \
               --head "$BRANCH" \
               --label "autorelease: pending"
