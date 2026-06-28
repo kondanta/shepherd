@@ -70,6 +70,15 @@ jobs:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
 
+      - name: Generate PR body
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.calver.outputs.version }} --unreleased --strip all
+        env:
+          OUTPUT: /tmp/pr-body.md
+          GITHUB_REPO: ${{ github.repository }}
+
       - name: Push release branch and open PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -84,13 +93,12 @@ jobs:
           git diff --staged --quiet || git commit -m "chore: release ${VERSION}"
           git push origin "$BRANCH" --force
 
-          PR_BODY=$(git-cliff --tag "${VERSION}" --unreleased --strip all)
           if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q "OPEN"; then
-            gh pr edit "$BRANCH" --body "$PR_BODY"
+            gh pr edit "$BRANCH" --body "$(cat /tmp/pr-body.md)"
           else
             gh pr create \
               --title "chore: release ${VERSION}" \
-              --body "$PR_BODY" \
+              --body "$(cat /tmp/pr-body.md)" \
               --base main \
               --head "$BRANCH" \
               --label "autorelease: pending"
