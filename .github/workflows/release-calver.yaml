@@ -1,0 +1,138 @@
+---
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Release CalVer
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'CHANGELOG.md'
+      - '**.md'
+  pull_request:
+    types:
+      - closed
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Open / update release PR ──────────────────────────────────────────────────
+  # Runs on every push to main (except CHANGELOG/md-only changes).
+  # Calculates the next CalVer tag, generates CHANGELOG, and opens or force-updates
+  # a release branch + PR so one release PR is always ready to merge.
+  open-release-pr:
+    name: Open / update release PR
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Generate Token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Calculate next CalVer
+        id: calver
+        run: |
+          YEAR=$(date +%Y)
+          MONTH=$(date +%-m)
+          PREFIX="${YEAR}.${MONTH}."
+          LATEST=$(git tag --list "${PREFIX}*" --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="${PREFIX}1"
+          else
+            PATCH=$(echo "$LATEST" | sed "s/${PREFIX}//")
+            NEXT="${PREFIX}$((PATCH + 1))"
+          fi
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+          echo "branch=release/${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate CHANGELOG
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --tag ${{ steps.calver.outputs.version }}
+        env:
+          OUTPUT: CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+
+      - name: Push release branch and open PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.calver.outputs.version }}
+          BRANCH: ${{ steps.calver.outputs.branch }}
+        run: |
+          git config user.name "sirmergington[bot]"
+          git config user.email "sirmergington[bot]@users.noreply.github.com"
+
+          git checkout -B "$BRANCH"
+          git add CHANGELOG.md
+          git diff --staged --quiet || git commit -m "chore: release ${VERSION}"
+          git push origin "$BRANCH" --force
+
+          if gh pr view "$BRANCH" --json state -q .state 2>/dev/null | grep -q "OPEN"; then
+            echo "Release PR already open — branch updated."
+          else
+            gh pr create \
+              --title "chore: release ${VERSION}" \
+              --body "$(printf '## Release %s\n\nMerge to cut the `%s` release.' "$VERSION" "$VERSION")" \
+              --base main \
+              --head "$BRANCH" \
+              --label "autorelease: pending"
+          fi
+
+  # ── Create GitHub Release ─────────────────────────────────────────────────────
+  # Runs when a release/* PR is merged. Creates the git tag and GitHub Release,
+  # which triggers release.yml to build binaries and Docker image.
+  create-release:
+    name: Create GitHub Release
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Generate Token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ secrets.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Extract version from branch name
+        id: version
+        run: echo "version=${GITHUB_HEAD_REF#release/}" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --generate-notes \
+            --latest
