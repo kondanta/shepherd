@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3.23", features = [
     "time",
     "tracing-log",
 ] }
-arc-swap = "1.9.1"
+arc-swap = "1.9.2"
 walkdir = "2.5.0"
 serde_yaml = "0.9.34"
 dotenvy = "0.15.7"
