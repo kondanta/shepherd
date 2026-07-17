@@ -5,7 +5,7 @@
 #
 # For local development use `Dockerfile` instead — it compiles from source.
 
-FROM docker:cli@sha256:862099ada15c669000bef53aa4cb9d821262829f45b0dda2159ccb276443043b
+FROM docker:cli@sha256:be132a9f282288de4afaf63379dff75711fda0147c6b72a9df44e51841402144
 
 # TARGETARCH is set by buildx: "amd64", "arm64", or "arm".
 # TARGETVARIANT distinguishes arm sub-architectures: "v7", "v6", etc.
