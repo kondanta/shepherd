@@ -9,10 +9,11 @@ rules:
   # theoretical cache-poisoning surface for significantly faster release builds.
   cache-poisoning:
     ignore:
-      - .github/workflows/release.yml
+      - release.yml
 
-  # The renovate checkout deliberately persists the app token so that renovate
-  # can push commits. persist-credentials: false would break it.
+  # These checkouts deliberately persist the app token so that subsequent
+  # git push steps work. persist-credentials: false would break them.
   artipacked:
     ignore:
-      - .github/workflows/renovate.yaml
+      - renovate.yaml
+      - release-calver.yaml

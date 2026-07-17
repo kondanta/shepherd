@@ -39,6 +39,8 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -62,7 +64,7 @@ jobs:
           echo "branch=release/${NEXT}" >> "$GITHUB_OUTPUT"
 
       - name: Generate CHANGELOG
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
         with:
           config: cliff.toml
           args: --tag ${{ steps.calver.outputs.version }}
@@ -71,7 +73,7 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Generate PR body
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
         with:
           config: cliff.toml
           args: --tag ${{ steps.calver.outputs.version }} --unreleased --strip all
@@ -124,6 +126,7 @@ jobs:
         with:
           client-id: ${{ secrets.BOT_CLIENT_ID }}
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
 
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
@@ -137,7 +140,7 @@ jobs:
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
 
       - name: Generate release notes
-        uses: orhun/git-cliff-action@v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
         with:
           config: cliff.toml
           args: --tag ${{ steps.version.outputs.version }} --unreleased --strip all
