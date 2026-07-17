@@ -1,6 +1,5 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: Security
-
 on:
   push:
     branches: [main]
@@ -12,14 +11,11 @@ on:
       - '.github/workflows/**'
       - '.github/zizmor.yml'
   workflow_dispatch:
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
   zizmor:
     name: Zizmor
@@ -30,5 +26,3 @@ jobs:
           persist-credentials: false
       - name: Run zizmor 🌈
         uses: zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02 # v0.6.0
-        with:
-          inputs: .github/workflows/
