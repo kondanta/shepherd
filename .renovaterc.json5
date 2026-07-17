@@ -27,5 +27,6 @@
   enabledManagers:[
     "cargo",
     "dockerfile",
+    "github-actions",
   ],
 }
