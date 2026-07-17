@@ -1,0 +1,19 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/zizmorcore/zizmor/main/docs/schemas/zizmor.schema.json
+rules:
+  # softprops/action-gh-release is intentional — it handles asset uploads and
+  # release note templating beyond what plain `gh release` offers.
+  superfluous-actions:
+    disable: true
+
+  # Accepted risk: Swatinem/rust-cache in the release workflow trades a
+  # theoretical cache-poisoning surface for significantly faster release builds.
+  cache-poisoning:
+    ignore:
+      - release.yml
+
+  # These checkouts deliberately persist the app token so that subsequent
+  # git push steps work. persist-credentials: false would break them.
+  artipacked:
+    ignore:
+      - renovate.yaml
+      - release-calver.yaml
