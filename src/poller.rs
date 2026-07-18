@@ -121,10 +121,8 @@ impl Poller {
                 .get_commit_files(&self.owner, &self.repo, &commit.sha)
                 .await?;
 
-            let compose_files: Vec<String> = files
-                .into_iter()
-                .filter(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
-                .collect();
+            let compose_files: Vec<String> =
+                files.into_iter().filter(|f| is_compose_file(f)).collect();
 
             if compose_files.is_empty() {
                 continue;
@@ -159,8 +157,7 @@ impl Poller {
         let compose_files: Vec<String> = files
             .into_iter()
             .filter(|f| {
-                (prefix.is_empty() || f.starts_with(prefix))
-                    && (f.ends_with(".yaml") || f.ends_with(".yml"))
+                (prefix.is_empty() || f.starts_with(prefix)) && is_compose_file(f)
             })
             .collect();
 
@@ -183,5 +180,46 @@ impl Poller {
             &self.renovate_username,
             &self.renovate_email,
         )
+    }
+}
+
+/// Returns true if `path` ends with a canonical compose file name.
+///
+/// Matches only the filename component, not a suffix of a longer name, so
+/// `not-compose.yaml` is not accepted.
+fn is_compose_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    matches!(name, "compose.yaml" | "docker-compose.yaml")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compose_yaml_accepted() {
+        assert!(is_compose_file("compose.yaml"));
+        assert!(is_compose_file("apps/myapp/compose.yaml"));
+    }
+
+    #[test]
+    fn docker_compose_yaml_accepted() {
+        assert!(is_compose_file("docker-compose.yaml"));
+        assert!(is_compose_file("infra/svc/docker-compose.yaml"));
+    }
+
+    #[test]
+    fn arbitrary_yaml_rejected() {
+        assert!(!is_compose_file("renovate.yaml"));
+        assert!(!is_compose_file(".renovaterc.yaml"));
+        assert!(!is_compose_file("ci.yml"));
+        assert!(!is_compose_file("not-compose.yaml"));
+    }
+
+    #[test]
+    fn yml_variants_rejected() {
+        // We intentionally do not support .yml — compose files use .yaml.
+        assert!(!is_compose_file("compose.yml"));
+        assert!(!is_compose_file("docker-compose.yml"));
     }
 }
