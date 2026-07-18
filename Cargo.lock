@@ -2109,6 +2109,7 @@ dependencies = [
  "subtle",
  "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
