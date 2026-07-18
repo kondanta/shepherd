@@ -531,6 +531,104 @@ mod tests {
     use crate::fs::walk::ServiceEntry;
     use std::path::PathBuf;
 
+    /// Minimal orchestrator for tests that exercise pure logic (no docker calls
+    /// happen during construction; docker IS needed because DockerClient::new
+    /// verifies the compose plugin is present).
+    async fn test_orchestrator() -> DeploymentOrchestrator {
+        use crate::{
+            config::{Config, Mode},
+            features,
+        };
+        let config = Config {
+            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            renovate_username: "renovate[bot]".to_string(),
+            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
+            github_token: None,
+            allow_latest_images: false,
+            api_token: None,
+            mode: Mode::Webhook { secret: "test".to_string() },
+            service_filter: None,
+            repo_path_prefix: None,
+            #[cfg(feature = "otlp")]
+            otlp_endpoint: "http://localhost:4317".to_string(),
+        };
+        DeploymentOrchestrator::new(&config, features::new_flags())
+            .await
+            .expect("DeploymentOrchestrator::new failed — is docker installed?")
+    }
+
+    fn push_payload(
+        git_ref: &str,
+        default_branch: &str,
+        commits: Vec<webhook::Commit>,
+    ) -> webhook::WebhookPayload {
+        webhook::WebhookPayload {
+            git_ref: git_ref.to_string(),
+            after: "abc123def456".to_string(),
+            repository: webhook::Repository {
+                full_name: "owner/repo".to_string(),
+                default_branch: default_branch.to_string(),
+            },
+            commits,
+        }
+    }
+
+    fn renovate_commit(files: Vec<&str>) -> webhook::Commit {
+        webhook::Commit {
+            author: webhook::Author {
+                name: "renovate[bot]".to_string(),
+                email: "renovate[bot]@users.noreply.github.com".to_string(),
+                username: Some("renovate[bot]".to_string()),
+            },
+            added: vec![],
+            modified: files.into_iter().map(String::from).collect(),
+        }
+    }
+
+    // ── handle_webhook early exits ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn handle_webhook_ignores_non_default_branch() {
+        let orch = test_orchestrator().await;
+        let payload = push_payload(
+            "refs/heads/feature/my-branch",
+            "main",
+            vec![renovate_commit(vec!["compose.yaml"])],
+        );
+        assert!(orch.handle_webhook(&payload).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_webhook_ignores_non_renovate_commit() {
+        let orch = test_orchestrator().await;
+        let payload = push_payload(
+            "refs/heads/main",
+            "main",
+            vec![webhook::Commit {
+                author: webhook::Author {
+                    name: "Alice".to_string(),
+                    email: "alice@example.com".to_string(),
+                    username: Some("alice".to_string()),
+                },
+                added: vec![],
+                modified: vec!["compose.yaml".to_string()],
+            }],
+        );
+        assert!(orch.handle_webhook(&payload).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_webhook_ignores_no_compose_files() {
+        let orch = test_orchestrator().await;
+        let payload = push_payload(
+            "refs/heads/main",
+            "main",
+            vec![renovate_commit(vec!["README.md", ".renovaterc.json"])],
+        );
+        assert!(orch.handle_webhook(&payload).await.is_ok());
+    }
+
     fn make_service(name: &str, image: &str, raw_yaml: &str) -> ServiceEntry {
         ServiceEntry {
             path: PathBuf::from("docker-compose.yaml"),
