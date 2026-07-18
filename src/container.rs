@@ -18,6 +18,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Maximum time to wait for the deploy semaphore before returning an error.
+/// Prevents indefinite hangs when a deploy stalls (e.g. Docker pull timeout).
+const SEMAPHORE_TIMEOUT: Duration = Duration::from_secs(300);
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DeploymentStatus {
@@ -144,11 +148,11 @@ impl DeploymentOrchestrator {
                 service.clone()
             }
         };
-        let _permit = self
-            .deploy_semaphore
-            .acquire()
-            .await
-            .map_err(|_| eyre!("deploy semaphore closed"))?;
+        let _permit =
+            tokio::time::timeout(SEMAPHORE_TIMEOUT, self.deploy_semaphore.acquire())
+                .await
+                .map_err(|_| eyre!("deploy semaphore timeout after 5 minutes"))?
+                .map_err(|_| eyre!("deploy semaphore closed"))?;
         self.execute_and_record(&service).await
     }
 
@@ -210,11 +214,11 @@ impl DeploymentOrchestrator {
         sha: &str,
         modified_files: &[String],
     ) -> Result<()> {
-        let _permit = self
-            .deploy_semaphore
-            .acquire()
-            .await
-            .map_err(|_| eyre!("deploy semaphore closed"))?;
+        let _permit =
+            tokio::time::timeout(SEMAPHORE_TIMEOUT, self.deploy_semaphore.acquire())
+                .await
+                .map_err(|_| eyre!("deploy semaphore timeout after 5 minutes"))?
+                .map_err(|_| eyre!("deploy semaphore closed"))?;
 
         let mut to_restart: Vec<ServiceEntry> = Vec::new();
 
