@@ -210,6 +210,16 @@ mod tests {
     }
 
     #[test]
+    fn replace_image_quoted_service_name_returns_none() {
+        // Quoted YAML keys ("web":) don't match the unquoted pattern.
+        // write_service_image's prior parse step would reject this file anyway
+        // (serde_yaml normalises quoted keys), so None here is consistent.
+        let content = "services:\n  \"web\":\n    image: nginx:1.24\n";
+        let result = replace_image_in_place(content, "web", "nginx:1.25");
+        assert!(result.is_none(), "quoted service keys should not be matched");
+    }
+
+    #[test]
     fn replace_image_preserves_trailing_newline() {
         let with_newline = "services:\n  svc:\n    image: foo:1\n";
         let without_newline = "services:\n  svc:\n    image: foo:1";

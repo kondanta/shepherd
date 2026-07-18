@@ -103,15 +103,13 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires docker to be installed"]
     async fn test_find_docker() {
         assert!(DockerClient::find_executable("docker").is_ok());
     }
 
     #[tokio::test]
-    #[ignore = "requires docker to be installed"]
     async fn test_verify_compose_available() {
         let result = DockerClient::verify_compose_available().await;
-        assert!(result.is_ok(), "docker compose not available: {:?}", result);
+        assert!(result.is_ok(), "docker compose not available: {result:?}");
     }
 }
