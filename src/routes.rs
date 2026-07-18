@@ -432,3 +432,153 @@ pub async fn disable_dry_run(State(state): State<AppState>) -> StatusCode {
     tracing::info!("Dry-run mode disabled");
     StatusCode::OK
 }
+
+// ── tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
+
+    // ── verify_github_signature ───────────────────────────────────────────────
+
+    fn make_sig(secret: &str, body: &[u8]) -> String {
+        use hmac::{Hmac, Mac};
+        let mut mac =
+            Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    #[test]
+    fn valid_signature_passes() {
+        let sig = make_sig("mysecret", b"hello");
+        assert!(verify_github_signature("mysecret", b"hello", &sig));
+    }
+
+    #[test]
+    fn wrong_secret_fails() {
+        let sig = make_sig("mysecret", b"hello");
+        assert!(!verify_github_signature("wrongsecret", b"hello", &sig));
+    }
+
+    #[test]
+    fn tampered_body_fails() {
+        let sig = make_sig("mysecret", b"hello");
+        assert!(!verify_github_signature("mysecret", b"world", &sig));
+    }
+
+    #[test]
+    fn missing_sha256_prefix_fails() {
+        let sig = make_sig("mysecret", b"hello");
+        // Strip the "sha256=" prefix to produce a bare hex string.
+        let bare = sig.strip_prefix("sha256=").unwrap().to_string();
+        assert!(!verify_github_signature("mysecret", b"hello", &bare));
+    }
+
+    #[test]
+    fn non_hex_signature_fails() {
+        assert!(!verify_github_signature(
+            "mysecret",
+            b"hello",
+            "sha256=notvalidhex!!"
+        ));
+    }
+
+    // ── require_api_token ─────────────────────────────────────────────────────
+
+    /// Build a minimal AppState for middleware tests.
+    ///
+    /// Requires docker to be installed (DeploymentOrchestrator::new calls
+    /// `docker compose version` on startup). Tests are not marked #[ignore]
+    /// because docker is available in this project's CI environment.
+    async fn test_state(api_token: Option<&str>) -> AppState {
+        use crate::{
+            config::{Config, Mode},
+            features,
+        };
+        let config = Arc::new(Config {
+            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            renovate_username: "renovate[bot]".to_string(),
+            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
+            github_token: None,
+            allow_latest_images: false,
+            api_token: api_token.map(String::from),
+            mode: Mode::Webhook { secret: "test".to_string() },
+            service_filter: None,
+            repo_path_prefix: None,
+            #[cfg(feature = "otlp")]
+            otlp_endpoint: "http://localhost:4317".to_string(),
+        });
+        let flags = features::new_flags();
+        let orchestrator =
+            crate::container::DeploymentOrchestrator::new(&config, flags.clone())
+                .await
+                .expect("DeploymentOrchestrator::new failed — is docker installed?");
+        AppState { config, orchestrator: Arc::new(orchestrator), flags }
+    }
+
+    fn token_test_app(state: AppState) -> axum::Router {
+        axum::Router::new()
+            .route("/", get(|| async { StatusCode::OK }))
+            .route_layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                require_api_token,
+            ))
+            .with_state(state)
+    }
+
+    #[tokio::test]
+    async fn valid_token_passes_middleware() {
+        let state = test_state(Some("correct-token")).await;
+        let app = token_test_app(state);
+        let req = Request::builder()
+            .uri("/")
+            .header("Authorization", "Bearer correct-token")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wrong_token_returns_401() {
+        let state = test_state(Some("correct-token")).await;
+        let app = token_test_app(state);
+        let req = Request::builder()
+            .uri("/")
+            .header("Authorization", "Bearer wrong-token")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn missing_auth_header_returns_401() {
+        let state = test_state(Some("correct-token")).await;
+        let app = token_test_app(state);
+        let req = Request::builder().uri("/").body(Body::empty()).unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn no_api_token_configured_returns_401() {
+        let state = test_state(None).await;
+        let app = token_test_app(state);
+        let req = Request::builder()
+            .uri("/")
+            .header("Authorization", "Bearer anything")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+}
