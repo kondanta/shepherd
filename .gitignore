@@ -28,4 +28,5 @@ target
 # Testing path
 test-path/*
 .env
-memory/*
+
+memory
