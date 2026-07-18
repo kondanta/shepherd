@@ -7,6 +7,8 @@ use tokio::sync::Mutex;
 
 pub struct Poller {
     orchestrator: Arc<DeploymentOrchestrator>,
+    // TODO: consolidate with DeploymentOrchestrator's github_client once the
+    // Poller and Orchestrator are unified or the client is made cheaply clonable.
     github: GitHubClient,
     owner: String,
     repo: String,

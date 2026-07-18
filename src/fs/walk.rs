@@ -172,9 +172,7 @@ pub(crate) fn parse_yaml_str(
             .as_str()
             .ok_or_else(|| eyre::eyre!("Invalid service name in {path:?}"))?;
 
-        if let Some(image) =
-            svc.get(Value::String("image".to_string())).and_then(Value::as_str)
-        {
+        if let Some(image) = svc.get("image").and_then(Value::as_str) {
             entries.push(ServiceEntry {
                 path: path.to_path_buf(),
                 name: service_name.to_string(),
