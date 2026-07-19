@@ -81,6 +81,16 @@ jobs:
           OUTPUT: /tmp/pr-body.md
           GITHUB_REPO: ${{ github.repository }}
 
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # stable
+
+      - name: Bump Cargo.toml version
+        env:
+          VERSION: ${{ steps.calver.outputs.version }}
+        run: |
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" Cargo.toml
+          cargo update --workspace --quiet
+
       - name: Push release branch and open PR
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -91,7 +101,7 @@ jobs:
           git config user.email "sirmergington[bot]@users.noreply.github.com"
 
           git checkout -B "$BRANCH"
-          git add CHANGELOG.md
+          git add CHANGELOG.md Cargo.toml Cargo.lock
           git diff --staged --quiet || git commit -m "chore: release ${VERSION}"
           git push origin "$BRANCH" --force
 

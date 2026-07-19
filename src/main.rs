@@ -15,6 +15,7 @@ use container::DeploymentOrchestrator;
 use routes::AppState;
 
 #[derive(Parser)]
+#[command(version)]
 struct Cli {
     #[arg(long, default_value_t = 8080)]
     port: u16,
@@ -86,6 +87,7 @@ async fn serve(
         config::Mode::Webhook { .. } => {}
     }
 
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "shepherd starting");
     tracing::info!("Starting shepherd on {addr}");
 
     let app = routes::router(state);
