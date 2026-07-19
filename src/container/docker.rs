@@ -1,7 +1,10 @@
 use color_eyre::Result;
 use eyre::{WrapErr, eyre};
-use std::path::Path;
-use tokio::process::Command as TokioCommand;
+use std::{path::Path, process::Stdio, time::Duration};
+use tokio::{process::Command as TokioCommand, time::timeout};
+
+// Per-operation ceiling: kills the docker child on expiry via kill_on_drop(true).
+const DOCKER_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub struct DockerClient {
     docker_bin: String,
@@ -33,10 +36,22 @@ impl DockerClient {
 
     #[tracing::instrument(skip(self), fields(image = %image))]
     pub async fn pull_image(&self, image: &str) -> Result<()> {
-        let output = TokioCommand::new(&self.docker_bin)
+        let child = TokioCommand::new(&self.docker_bin)
             .args(["pull", image])
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .wrap_err("Failed to spawn docker pull")?;
+
+        let output = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output())
             .await
+            .map_err(|_| {
+                eyre!(
+                    "docker pull timed out after {}s",
+                    DOCKER_COMMAND_TIMEOUT.as_secs()
+                )
+            })?
             .wrap_err("Failed to execute docker pull command")?;
 
         if !output.status.success() {
@@ -63,17 +78,24 @@ impl DockerClient {
             })?;
 
         let mut cmd = TokioCommand::new(&self.docker_bin);
-        cmd.current_dir(compose_dir).arg("compose").args(["-f", file_name]).args([
-            "up",
-            "-d",
-            "--force-recreate",
-            "--no-deps",
-            service_name,
-        ]);
+        cmd.current_dir(compose_dir)
+            .arg("compose")
+            .args(["-f", file_name])
+            .args(["up", "-d", "--force-recreate", "--no-deps", service_name])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
-        let output = cmd
-            .output()
+        let child = cmd.spawn().wrap_err("Failed to spawn docker compose up")?;
+
+        let output = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output())
             .await
+            .map_err(|_| {
+                eyre!(
+                    "docker compose up timed out after {}s",
+                    DOCKER_COMMAND_TIMEOUT.as_secs()
+                )
+            })?
             .wrap_err("Failed to execute docker compose up command")?;
 
         if !output.status.success() {
