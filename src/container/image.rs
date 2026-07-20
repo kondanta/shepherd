@@ -73,7 +73,11 @@ impl ImageReference {
 
 impl fmt::Display for ImageReference {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.repository, self.tag)
+        write!(f, "{}:{}", self.repository, self.tag)?;
+        if let Some(digest) = &self.digest {
+            write!(f, "@{digest}")?;
+        }
+        Ok(())
     }
 }
 
@@ -125,6 +129,15 @@ mod tests {
             digest: None,
         };
         assert_eq!(img.to_string(), "nginx:1.25");
+    }
+
+    #[test]
+    fn test_to_string_with_digest() {
+        let img = ImageReference::parse("nginx@sha256:abcd1234").unwrap();
+        assert_eq!(img.to_string(), "nginx:latest@sha256:abcd1234");
+
+        let img = ImageReference::parse("nginx:1.25@sha256:abcd1234").unwrap();
+        assert_eq!(img.to_string(), "nginx:1.25@sha256:abcd1234");
     }
 
     #[test]
