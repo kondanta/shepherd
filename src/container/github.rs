@@ -198,12 +198,20 @@ impl GitHubClient {
         let url =
             format!("https://api.github.com/repos/{owner}/{repo}/commits/{sha}");
         let detail: ApiCommitDetail = self.api_get(&url).await?;
-        Ok(detail
+        let files: Vec<String> = detail
             .files
             .unwrap_or_default()
             .into_iter()
             .map(|f| f.filename)
-            .collect())
+            .collect();
+        if files.len() == 300 {
+            tracing::warn!(
+                sha,
+                "Commit file list is at GitHub's 300-file cap; \
+                 some changed files may be missed"
+            );
+        }
+        Ok(files)
     }
 
     /// Returns every file path (blob) in the repository at the given commit SHA.
