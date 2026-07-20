@@ -95,25 +95,31 @@ impl WebhookPayload {
         self.git_ref == format!("refs/heads/{}", self.repository.default_branch)
     }
 
-    /// Check if any commit in this push looks like a Renovate commit.
-    pub fn is_renovate_commit(&self, username: &str, email: &str) -> bool {
-        self.commits.iter().any(|c| {
-            is_renovate_author(
-                c.author.username.as_deref(),
-                &c.author.name,
-                &c.author.email,
-                username,
-                email,
-            )
-        })
-    }
-
-    /// Returns all compose files (*.yaml / *.yml) touched across all commits.
+    /// Returns compose files (*.yaml / *.yml) touched by Renovate-authored commits only.
+    ///
+    /// Filtering by author here (rather than as a separate `is_renovate_commit` guard)
+    /// prevents human commits in a mixed push from being auto-deployed alongside
+    /// legitimate Renovate changes. Returns an empty set when no Renovate commits
+    /// touched compose files, which the caller treats as "nothing to do".
+    ///
     /// Duplicate delivery of the same webhook is safe: the second pass will
     /// find no config diff after the first already wrote and deployed.
-    pub fn modified_compose_files(&self) -> HashSet<String> {
+    pub fn modified_compose_files(
+        &self,
+        username: &str,
+        email: &str,
+    ) -> HashSet<String> {
         self.commits
             .iter()
+            .filter(|c| {
+                is_renovate_author(
+                    c.author.username.as_deref(),
+                    &c.author.name,
+                    &c.author.email,
+                    username,
+                    email,
+                )
+            })
             .flat_map(|c| c.modified.iter().chain(c.added.iter()))
             .filter(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
             .cloned()
@@ -164,8 +170,11 @@ mod tests {
 
         assert_eq!(payload.repository.full_name, "user/my-app");
         assert!(payload.is_default_branch());
-        assert!(payload.is_renovate_commit("renovate", "renovate"));
-        assert!(!payload.modified_compose_files().is_empty());
+        assert!(
+            !payload
+                .modified_compose_files("renovate", "renovate@github.com")
+                .is_empty()
+        );
     }
 
     #[test]
