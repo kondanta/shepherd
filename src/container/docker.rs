@@ -68,6 +68,24 @@ impl DockerClient {
         compose_file: &Path,
         service_name: &str,
     ) -> Result<()> {
+        self.compose_up(compose_file, service_name, true).await
+    }
+
+    #[tracing::instrument(skip(self), fields(service = %service_name, file = ?compose_file))]
+    pub async fn compose_up_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> Result<()> {
+        self.compose_up(compose_file, service_name, false).await
+    }
+
+    async fn compose_up(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+        force_recreate: bool,
+    ) -> Result<()> {
         let compose_dir = compose_file.parent().ok_or_else(|| {
             eyre!("Failed to get parent directory of compose file")
         })?;
@@ -77,16 +95,22 @@ impl DockerClient {
                 eyre!("Compose file path is not valid UTF-8: {compose_file:?}")
             })?;
 
-        let mut cmd = TokioCommand::new(&self.docker_bin);
-        cmd.current_dir(compose_dir)
+        let mut up_args = vec!["up", "-d", "--no-deps"];
+        if force_recreate {
+            up_args.push("--force-recreate");
+        }
+        up_args.push(service_name);
+
+        let child = TokioCommand::new(&self.docker_bin)
+            .current_dir(compose_dir)
             .arg("compose")
             .args(["-f", file_name])
-            .args(["up", "-d", "--force-recreate", "--no-deps", service_name])
+            .args(&up_args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let child = cmd.spawn().wrap_err("Failed to spawn docker compose up")?;
+            .kill_on_drop(true)
+            .spawn()
+            .wrap_err("Failed to spawn docker compose up")?;
 
         let output = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output())
             .await

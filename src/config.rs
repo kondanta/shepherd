@@ -30,6 +30,16 @@ pub struct Config {
     /// Services not in the list are ignored even if their config changed.
     pub service_filter: Option<Vec<String>>,
 
+    /// When true (default), shepherd pulls and applies all services on startup
+    /// using idempotent `docker compose up -d --no-deps`. Set `INITIAL_SYNC=false`
+    /// to opt out. Covers the gap between a shepherd restart and the next push.
+    pub initial_sync: bool,
+
+    /// The compose service name shepherd runs as. When set, shepherd sorts
+    /// itself last in any batch so sibling services deploy before it replaces
+    /// itself. Set to match the service name in your compose file.
+    pub shepherd_service_name: Option<String>,
+
     /// Only process files whose repo path starts with this prefix.
     /// The prefix is stripped when constructing the local path, so
     /// `baremetals/node1/myapp/compose.yaml` with prefix `baremetals/node1`
@@ -123,6 +133,13 @@ impl Config {
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
             .unwrap_or(false);
 
+        let initial_sync = env::var("INITIAL_SYNC")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(true);
+
+        let shepherd_service_name =
+            env::var("SHEPHERD_SERVICE_NAME").ok().filter(|s| !s.is_empty());
+
         #[cfg(feature = "otlp")]
         let otlp_endpoint = env::var("OTLP_ENDPOINT")
             .ok()
@@ -140,6 +157,8 @@ impl Config {
             api_token,
             service_filter,
             repo_path_prefix,
+            initial_sync,
+            shepherd_service_name,
             #[cfg(feature = "otlp")]
             otlp_endpoint,
         })

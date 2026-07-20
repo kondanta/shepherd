@@ -45,7 +45,9 @@ All configuration is via environment variables. A `.env` file is loaded if prese
 | `REPO_PATH_PREFIX` | no | — | Only handle files under this repo path; strips the prefix when writing locally |
 | `SERVICE_FILTER` | no | — | Comma-separated names of services this instance may deploy — these are the keys under `services:` in the compose file, not folder names; unset means all |
 | `ALLOW_LATEST_IMAGES` | no | `false` | Allow services tagged `latest` to be deployed |
-| `API_TOKEN` | no | — | Bearer token required for `/flags/*` endpoints |
+| `INITIAL_SYNC` | no | `true` | On startup, pull and apply all services using idempotent `docker compose up -d --no-deps`. Catches any drift that accumulated while Shepherd was down. Set to `false` to disable. |
+| `SHEPHERD_SERVICE_NAME` | no | — | The compose service name Shepherd itself runs as. When set, Shepherd always deploys itself last in any batch so sibling services are updated before it replaces its own container. Set this to match the service key under `services:` in your compose file (e.g. `shepherd`). |
+| `API_TOKEN` | no | — | Bearer token required for `/flags/*` and `/sync` endpoints |
 | `LOG_LEVEL` | no | `info` | One of `trace`, `debug`, `info`, `warn`, `error` |
 | `OTLP_ENDPOINT` | no | — | gRPC endpoint for traces; required with `--features otlp` |
 
@@ -89,6 +91,8 @@ See `docker-compose.example.yml` for a complete example.
 {"service": "myapp"}
 ```
 
+`POST /sync` — trigger an immediate reconciliation of all services on disk, identical to the startup sync. Returns 202. Returns 503 if deployments are paused.
+
 **Health**
 
 `GET /healthz` — liveness probe. Returns 200 if `ROOT_DIR` is accessible.
@@ -97,7 +101,7 @@ See `docker-compose.example.yml` for a complete example.
 
 **Flags**
 
-All `/flags/*` endpoints require `Authorization: Bearer <API_TOKEN>`.
+All `/flags/*` and `/sync` endpoints require `Authorization: Bearer <API_TOKEN>`.
 
 `GET /flags` — current flag state.
 

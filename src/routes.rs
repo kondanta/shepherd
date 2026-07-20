@@ -40,6 +40,7 @@ pub fn router(state: AppState) -> axum::Router {
 
     let flags_router = axum::Router::new()
         .route("/deploy", post(manual_deploy))
+        .route("/sync", post(trigger_sync))
         .route("/deployments", get(list_deployments))
         .route("/list-services", get(list_managed_services))
         .route("/flags", get(get_flags))
@@ -380,6 +381,20 @@ pub async fn manual_deploy(
     StatusCode::ACCEPTED
 }
 
+pub async fn trigger_sync(State(state): State<AppState>) -> StatusCode {
+    if state.flags.load().deployments_paused {
+        tracing::info!("Deployments paused, rejecting sync request");
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    let orchestrator = Arc::clone(&state.orchestrator);
+    tokio::spawn(async move {
+        if let Err(e) = orchestrator.initial_sync().await {
+            tracing::error!("Sync failed: {e:?}");
+        }
+    });
+    StatusCode::ACCEPTED
+}
+
 // ── flag endpoints ────────────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
@@ -514,6 +529,8 @@ mod tests {
             mode: Mode::Webhook { secret: "test".to_string() },
             service_filter: None,
             repo_path_prefix: None,
+            initial_sync: true,
+            shepherd_service_name: None,
             #[cfg(feature = "otlp")]
             otlp_endpoint: "http://localhost:4317".to_string(),
         });
