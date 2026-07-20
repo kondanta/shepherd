@@ -114,7 +114,7 @@ impl DeploymentOrchestrator {
     /// deployment semaphore as `handle_webhook` to prevent races.
     pub async fn deploy_service(
         &self,
-        service: &ServiceEntry,
+        service: ServiceEntry,
         image: Option<String>,
     ) -> Result<()> {
         if !self.is_service_allowed(&service.name) {
@@ -127,10 +127,14 @@ impl DeploymentOrchestrator {
             Some(img) => {
                 let image_ref = ImageReference::parse(&img)?;
                 check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
-                let (path, name, image) =
+                let (path, name, img_for_write) =
                     (service.path.clone(), service.name.clone(), img.clone());
                 tokio::task::spawn_blocking(move || {
-                    crate::fs::walk::write_service_image(&path, &name, &image)
+                    crate::fs::walk::write_service_image(
+                        &path,
+                        &name,
+                        &img_for_write,
+                    )
                 })
                 .await
                 .map_err(|e| eyre!("write_service_image task panicked: {e}"))?
@@ -140,12 +144,12 @@ impl DeploymentOrchestrator {
                     image = %img,
                     "Updated compose file with new image for manual deploy"
                 );
-                ServiceEntry { image: img, ..service.clone() }
+                ServiceEntry { image: img, ..service }
             }
             None => {
                 let image_ref = ImageReference::parse(&service.image)?;
                 check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
-                service.clone()
+                service
             }
         };
         let _permit =

@@ -370,10 +370,9 @@ pub async fn manual_deploy(
         }
     };
 
-    let service_name = req.service.clone();
+    let service_name = service.name.clone();
     tokio::spawn(async move {
-        if let Err(e) = state.orchestrator.deploy_service(&service, req.image).await
-        {
+        if let Err(e) = state.orchestrator.deploy_service(service, req.image).await {
             tracing::error!("Manual deploy of '{service_name}' failed: {e:?}");
         }
     });
