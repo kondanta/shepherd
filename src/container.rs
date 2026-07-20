@@ -173,14 +173,10 @@ impl DeploymentOrchestrator {
             tracing::info!("Ignoring push to non-default branch");
             return Ok(());
         }
-        if !payload.is_renovate_commit(&self.renovate_username, &self.renovate_email)
-        {
-            tracing::info!("Ignoring non-Renovate commit");
-            return Ok(());
-        }
-
-        let modified: Vec<String> =
-            payload.modified_compose_files().into_iter().collect();
+        let modified: Vec<String> = payload
+            .modified_compose_files(&self.renovate_username, &self.renovate_email)
+            .into_iter()
+            .collect();
         if modified.is_empty() {
             tracing::info!("No compose file changes, skipping");
             return Ok(());
