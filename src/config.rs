@@ -98,13 +98,26 @@ impl Config {
         let api_token = env::var("API_TOKEN").ok().filter(|s| !s.is_empty());
         let repo_path_prefix =
             env::var("REPO_PATH_PREFIX").ok().filter(|s| !s.is_empty());
-        let service_filter =
-            env::var("SERVICE_FILTER").ok().filter(|s| !s.is_empty()).map(|s| {
-                s.split(',')
+        let service_filter = match env::var("SERVICE_FILTER")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            None => None,
+            Some(raw) => {
+                let services: Vec<String> = raw
+                    .split(',')
                     .map(|name| name.trim().to_string())
                     .filter(|name| !name.is_empty())
-                    .collect::<Vec<_>>()
-            });
+                    .collect();
+                if services.is_empty() {
+                    return Err(format!(
+                        "SERVICE_FILTER '{raw}' contains no valid service names; \
+                         check for stray commas or whitespace"
+                    ));
+                }
+                Some(services)
+            }
+        };
 
         let allow_latest_images = env::var("ALLOW_LATEST_IMAGES")
             .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
