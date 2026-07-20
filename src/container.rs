@@ -22,6 +22,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Prevents indefinite hangs when a deploy stalls (e.g. Docker pull timeout).
 const SEMAPHORE_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DeployMode {
+    /// `docker compose up -d --force-recreate --no-deps` — always recreates
+    /// the container, guaranteeing the new image is picked up even if the
+    /// compose file didn't change. Used for webhook and manual deploys.
+    ForceRecreate,
+    /// `docker compose up -d --no-deps` — lets docker compose detect image
+    /// drift itself and only recreates when something actually changed. Used
+    /// for initial sync so already-correct services are not restarted.
+    IdempotentUp,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DeploymentStatus {
@@ -56,6 +68,7 @@ pub struct DeploymentOrchestrator {
     renovate_username: String,
     renovate_email: String,
     allow_latest: bool,
+    shepherd_service_name: Option<String>,
     flags: SharedFlags,
     /// Deployment history, capped at 200 entries. Uses a std Mutex because
     /// the critical section is microseconds — just a VecDeque push.
@@ -76,6 +89,7 @@ impl DeploymentOrchestrator {
             renovate_username: config.renovate_username.clone(),
             renovate_email: config.renovate_email.clone(),
             allow_latest: config.allow_latest_images,
+            shepherd_service_name: config.shepherd_service_name.clone(),
             flags,
             history: Mutex::new(VecDeque::new()),
             deploy_semaphore: tokio::sync::Semaphore::new(1),
@@ -157,7 +171,56 @@ impl DeploymentOrchestrator {
                 .await
                 .map_err(|_| eyre!("deploy semaphore timeout after 5 minutes"))?
                 .map_err(|_| eyre!("deploy semaphore closed"))?;
-        self.execute_and_record(&service).await
+        self.execute_and_record(&service, DeployMode::ForceRecreate).await
+    }
+
+    /// Pull and apply all services currently on disk using idempotent
+    /// `docker compose up -d --no-deps`. Services not in SERVICE_FILTER or
+    /// that fail tag policy are skipped. Errors per service are logged and
+    /// recorded in history but do not abort remaining services.
+    ///
+    /// The deploy semaphore is acquired and released per service so that
+    /// incoming webhook or manual deploys are not blocked for the full duration
+    /// of the sync.
+    #[tracing::instrument(skip(self))]
+    pub async fn initial_sync(&self) -> Result<()> {
+        tracing::info!("Starting initial sync");
+        let services = self.get_managed_services().await?;
+        let mut queued = 0u32;
+        for service in services {
+            if !self.is_service_allowed(&service.name) {
+                tracing::debug!(service = %service.name, "Skipping: not in SERVICE_FILTER");
+                continue;
+            }
+            let image_ref = match ImageReference::parse(&service.image) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(service = %service.name, "Skipping: unparseable image '{}': {e:?}", service.image);
+                    continue;
+                }
+            };
+            if let Err(e) =
+                check_tag_policy(&service.name, &image_ref, self.allow_latest)
+            {
+                tracing::warn!("{e}");
+                continue;
+            }
+            let _permit = tokio::time::timeout(
+                SEMAPHORE_TIMEOUT,
+                self.deploy_semaphore.acquire(),
+            )
+            .await
+            .map_err(|_| eyre!("deploy semaphore timeout after 5 minutes"))?
+            .map_err(|_| eyre!("deploy semaphore closed"))?;
+            queued += 1;
+            if let Err(e) =
+                self.execute_and_record(&service, DeployMode::IdempotentUp).await
+            {
+                tracing::error!(service = %service.name, "Sync failed: {e:?}");
+            }
+        }
+        tracing::info!(services = queued, "Initial sync complete");
+        Ok(())
     }
 
     /// Process a GitHub push webhook.
@@ -261,8 +324,26 @@ impl DeploymentOrchestrator {
         let mut seen = std::collections::HashSet::new();
         to_restart.retain(|s| seen.insert(s.name.clone()));
 
+        // Sort so shepherd itself always deploys last. This ensures sibling
+        // services are running before shepherd replaces its own container.
+        if let Some(self_name) = &self.shepherd_service_name {
+            to_restart.sort_by_key(|s| s.name.eq_ignore_ascii_case(self_name));
+        }
+
         for service in to_restart {
-            if let Err(e) = self.execute_and_record(&service).await {
+            if self
+                .shepherd_service_name
+                .as_deref()
+                .is_some_and(|n| n.eq_ignore_ascii_case(&service.name))
+            {
+                tracing::info!(
+                    service = %service.name,
+                    "Deploying self — process will exit after docker compose up returns"
+                );
+            }
+            if let Err(e) =
+                self.execute_and_record(&service, DeployMode::ForceRecreate).await
+            {
                 tracing::error!("Failed to update {}: {e:?}", service.name);
             }
         }
@@ -350,11 +431,15 @@ impl DeploymentOrchestrator {
         Ok((old_services, new_services))
     }
 
-    #[tracing::instrument(skip(self), fields(service = %service.name, image = %service.image))]
-    async fn execute_and_record(&self, service: &ServiceEntry) -> Result<()> {
+    #[tracing::instrument(skip(self, mode), fields(service = %service.name, image = %service.image))]
+    async fn execute_and_record(
+        &self,
+        service: &ServiceEntry,
+        mode: DeployMode,
+    ) -> Result<()> {
         let timestamp = now_secs();
         let start = Instant::now();
-        match self.update_service(service).await {
+        match self.update_service(service, mode).await {
             Ok(()) => {
                 let elapsed = duration_secs(start.elapsed());
                 crate::metrics::deployment_recorded(&service.name, true, elapsed);
@@ -382,23 +467,40 @@ impl DeploymentOrchestrator {
         }
     }
 
-    #[tracing::instrument(skip(self), fields(service = %service.name))]
-    async fn update_service(&self, service: &ServiceEntry) -> Result<()> {
+    #[tracing::instrument(skip(self, mode), fields(service = %service.name))]
+    async fn update_service(
+        &self,
+        service: &ServiceEntry,
+        mode: DeployMode,
+    ) -> Result<()> {
         tracing::info!("Updating service: {}", service.name);
 
         if self.flags.load().dry_run {
             tracing::info!(
-                "[dry-run] Would pull {} and restart {}",
+                "[dry-run] Would pull {} and {} {}",
                 service.image,
+                match mode {
+                    DeployMode::ForceRecreate => "force-recreate",
+                    DeployMode::IdempotentUp => "up (idempotent)",
+                },
                 service.name
             );
             return Ok(());
         }
 
         self.docker_client.pull_image(&service.image).await?;
-        self.docker_client
-            .restart_compose_service(&service.path, &service.name)
-            .await?;
+        match mode {
+            DeployMode::ForceRecreate => {
+                self.docker_client
+                    .restart_compose_service(&service.path, &service.name)
+                    .await?;
+            }
+            DeployMode::IdempotentUp => {
+                self.docker_client
+                    .compose_up_service(&service.path, &service.name)
+                    .await?;
+            }
+        }
         tracing::info!("Service updated successfully: {}", service.name);
         Ok(())
     }
@@ -550,6 +652,8 @@ mod tests {
             mode: Mode::Webhook { secret: "test".to_string() },
             service_filter: None,
             repo_path_prefix: None,
+            initial_sync: true,
+            shepherd_service_name: None,
             #[cfg(feature = "otlp")]
             otlp_endpoint: "http://localhost:4317".to_string(),
         };

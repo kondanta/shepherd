@@ -90,6 +90,15 @@ async fn serve(
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "shepherd starting");
     tracing::info!("Starting shepherd on {addr}");
 
+    if state.config.initial_sync {
+        let orchestrator = Arc::clone(&state.orchestrator);
+        tokio::spawn(async move {
+            if let Err(e) = orchestrator.initial_sync().await {
+                tracing::error!("Initial sync failed: {e:?}");
+            }
+        });
+    }
+
     let app = routes::router(state);
     let handle: Handle<SocketAddr> = Handle::new();
     tokio::spawn(shutdown_signal(handle.clone()));
