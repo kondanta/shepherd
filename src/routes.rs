@@ -370,13 +370,14 @@ pub async fn manual_deploy(
         }
     };
 
-    match state.orchestrator.deploy_service(&service, req.image).await {
-        Ok(()) => StatusCode::OK,
-        Err(e) => {
-            tracing::error!("Manual deploy of '{}' failed: {e:?}", req.service);
-            StatusCode::INTERNAL_SERVER_ERROR
+    let service_name = service.name.clone();
+    tokio::spawn(async move {
+        if let Err(e) = state.orchestrator.deploy_service(service, req.image).await {
+            tracing::error!("Manual deploy of '{service_name}' failed: {e:?}");
         }
-    }
+    });
+
+    StatusCode::ACCEPTED
 }
 
 // ── flag endpoints ────────────────────────────────────────────────────────────
