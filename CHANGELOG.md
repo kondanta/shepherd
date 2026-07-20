@@ -1,5 +1,91 @@
 # Changelog
 
+## [2026.7.2] - 2026-07-20
+
+### Bug Fixes
+
+- **image:** include digest in ImageReference Display (#115)([`30864de`](https://github.com/kondanta/shepherd/commit/30864de80eedea4916c294f97e7309cbf991d32b))
+
+- **github:** warn when get_commit_files hits GitHub's 300-file cap (#114)([`7f9d08a`](https://github.com/kondanta/shepherd/commit/7f9d08ac7f8c4f61e3a673ac6da483c0c8c7b75e))
+
+- **routes:** spawn manual_deploy and return 202 Accepted (#113)([`da78957`](https://github.com/kondanta/shepherd/commit/da789578efa697c355ea1eaa0ec537b3f8e6f45b))
+
+- **webhook:** filter compose file collection to Renovate-authored commits only (#112)([`ba616ff`](https://github.com/kondanta/shepherd/commit/ba616ff375956d38a80892b4b50455cfebf4f397))
+
+- **config:** reject SERVICE_FILTER values that parse to zero service names (#111)([`36c1df4`](https://github.com/kondanta/shepherd/commit/36c1df41f66d9b3fe7bc6eff2bde1047bc8c1aa4))
+
+- **docker:** add per-operation timeout to pull and compose-up commands (#110)([`8d25709`](https://github.com/kondanta/shepherd/commit/8d257094673ef2dedb89002184b40aa905926f71))
+
+- **container:** timeout deploy semaphore acquisition after 5 minutes (#101)([`5bdde05`](https://github.com/kondanta/shepherd/commit/5bdde05a6164910606c2ceb7fb6d51f73d89b77d))
+
+- **poller:** restrict YAML filter to compose/docker-compose.yaml (#100)([`0ae3ce0`](https://github.com/kondanta/shepherd/commit/0ae3ce0ba96fae6957e30bb5025dae2f880e30d2))
+
+- **ci:** put security workflow in to workflows folder (#97)([`a0ae2ab`](https://github.com/kondanta/shepherd/commit/a0ae2ab3a5ada999cdf23f67f3e6bb00bd276eae))
+
+- **ci:** release uses github changelog and it creates noise (#82)([`3264dc8`](https://github.com/kondanta/shepherd/commit/3264dc803738368bc3661572fc7984a92a62c320))
+
+
+### Code Refactoring
+
+- **ci:** pass version info to binary (#109)([`20c5d21`](https://github.com/kondanta/shepherd/commit/20c5d21687bf023629bcf5ff0cdf6e7f0854d69a))
+
+- **walk:** use &str serde key lookup (#102)([`30b1673`](https://github.com/kondanta/shepherd/commit/30b167307e19857357942266d16ac6984939b709))
+
+
+### Features
+
+- trigger shepherd to do sync when it is started for the first time (#120)([`b0b5721`](https://github.com/kondanta/shepherd/commit/b0b572126c6d452cf1dda6b45b9f6f1ba60ba54c))
+
+- **rennovate:** make rennovate track github actions (#98)([`d084337`](https://github.com/kondanta/shepherd/commit/d084337a617b91bd512f0a58091acc9f60267198))
+
+- **ci:** add zizmor for githubaction permission control (#96)([`f203d44`](https://github.com/kondanta/shepherd/commit/f203d440565e7e5e0a3f67fc3a0d08efee0587a2))
+
+
+### Miscellaneous Chores
+
+- **deps:** update deps (#119)([`ba5bf87`](https://github.com/kondanta/shepherd/commit/ba5bf87678be5694108ee8be8ac26287835011de))
+
+- **deps:** update rust crate tokio to v1.53.1 (#118)([`094a596`](https://github.com/kondanta/shepherd/commit/094a5969f3502687be425eb03acb43b25293aaa5))
+
+- **deps:** update rust crate clap to v4.6.3 (#117)([`84d0c71`](https://github.com/kondanta/shepherd/commit/84d0c71bc9bf9da50ac60a551519b0ec0ca27b00))
+
+- **deps:** update rust crate serde_json to v1.0.151 (#116)([`3062c7d`](https://github.com/kondanta/shepherd/commit/3062c7d93b42a9020e37a024ee27dd069ec713d2))
+
+- **deps:** lock file maintenance (#108)([`c9affd0`](https://github.com/kondanta/shepherd/commit/c9affd0d59b8866520c8dcddc47f81e821095daf))
+
+- ignore memory folder (#107)([`b8d402a`](https://github.com/kondanta/shepherd/commit/b8d402a39f2875ab02d94ef1693738ffb819029e))
+
+- **deps:** update rust crate serde to v1.0.229 (#106)([`1155098`](https://github.com/kondanta/shepherd/commit/11550982efba02a4623457a0fe045a8812cd8a68))
+
+- **deps:** pin rust crate tower to =0.5.3 (#104)([`8f1c004`](https://github.com/kondanta/shepherd/commit/8f1c0045d927bd4cb587e95580de3be5fdd0377f))
+
+- **deps:** update docker:cli docker digest to be132a9 (#99)([`495141e`](https://github.com/kondanta/shepherd/commit/495141ecefbba630fd0120e8ca54ea78b08498ec))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to ff60ee1 (#95)([`e3bae94`](https://github.com/kondanta/shepherd/commit/e3bae94664771d6af4a453c988ab8ced5d950885))
+
+- **deps:** update rust crate tokio to v1.53.0 (#94)([`872f310`](https://github.com/kondanta/shepherd/commit/872f3102a01538e1dac0bc54851eae163788d086))
+
+- **deps:** update deps (#93)([`1ebb905`](https://github.com/kondanta/shepherd/commit/1ebb9050a17ffa82dc7f722a94460cdbc18296e7))
+
+- **deps:** update rust crate tokio to v1.52.4 (#92)([`2da2ba5`](https://github.com/kondanta/shepherd/commit/2da2ba532632a87b1cfb3f7f5222aba7ac8f222f))
+
+- **deps:** update rust crate clap to v4.6.2 (#91)([`f8ce2c5`](https://github.com/kondanta/shepherd/commit/f8ce2c539a9f6db3cadd2ad4104447d7c9309f87))
+
+- **deps:** update rust crate which to v8.0.5 (#90)([`1f984b4`](https://github.com/kondanta/shepherd/commit/1f984b4213c05b161c19772a85165f29e5ddf1bd))
+
+- **deps:** lockfile maintenance (#89)([`4d29ef6`](https://github.com/kondanta/shepherd/commit/4d29ef67c8e8a6523232c827625eff3a3a670bc9))
+
+- **deps:** lock file maintenance (#88)([`ab3e812`](https://github.com/kondanta/shepherd/commit/ab3e8120f0b3ab3f0727c8fa4b7ca96e61e052b8))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to 249e813 (#87)([`375870a`](https://github.com/kondanta/shepherd/commit/375870a13e05e8a265dc23e46171734fb377dc19))
+
+- **deps:** update deps (#86)([`891b8cb`](https://github.com/kondanta/shepherd/commit/891b8cb209d123a1316b2f2ff5aeef0082de233c))
+
+- **deps:** lock file maintenance (#85)([`527a2c8`](https://github.com/kondanta/shepherd/commit/527a2c820b1a9e1aef617fc84fdc1a2c3dee3d7f))
+
+- update dependencies (#84)([`dd77525`](https://github.com/kondanta/shepherd/commit/dd77525634a6970b6131d0d7f2ec419499d1360f))
+
+
 ## [2026.7.1] - 2026-07-01
 
 ### Bug Fixes
