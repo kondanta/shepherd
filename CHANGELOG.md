@@ -1,5 +1,20 @@
 # Changelog
 
+## [2026.7.3] - 2026-07-31
+
+### Miscellaneous Chores
+
+- **deps:** update docker:cli docker digest to 206ae9c (#126)([`b306dc0`](https://github.com/kondanta/shepherd/commit/b306dc041e6dd71e57047fe8963e60978273253c))
+
+- **deps:** update rust crate clap to v4.6.5 (#125)([`e0c3d55`](https://github.com/kondanta/shepherd/commit/e0c3d552b9db02e0ca39bf6114f0a4c5c244dd92))
+
+- **deps:** update rust crate axum-prometheus to v0.10.1 (#124)([`83797e5`](https://github.com/kondanta/shepherd/commit/83797e58f6b963a65043b6b2cfd7c4de3a50af67))
+
+- **deps:** lock file maintenance (#123)([`256d1a9`](https://github.com/kondanta/shepherd/commit/256d1a9a74f9cb60ec27a71b6cb5719c5fd0288b))
+
+- **deps:** update rust crate clap to v4.6.4 (#122)([`a119075`](https://github.com/kondanta/shepherd/commit/a119075bfc5a0a43cd0d2c9dd86ef064b06a674b))
+
+
 ## [2026.7.2] - 2026-07-20
 
 ### Bug Fixes
