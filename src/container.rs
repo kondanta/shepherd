@@ -641,33 +641,30 @@ fn duration_secs(d: Duration) -> f64 {
 mod tests {
     use super::*;
     use crate::{container::docker::DockerExecutor, fs::walk::ServiceEntry};
-    use std::{future::Future, path::PathBuf};
+    use std::path::PathBuf;
 
     #[derive(Clone, Default)]
     struct FailingDockerExecutor;
 
     impl DockerExecutor for FailingDockerExecutor {
-        fn pull_image(
-            &self,
-            _image: &str,
-        ) -> impl Future<Output = Result<()>> + Send {
-            async { Err(eyre::eyre!("docker pull failed")) }
+        async fn pull_image(&self, _image: &str) -> Result<()> {
+            Err(eyre::eyre!("docker pull failed"))
         }
 
-        fn restart_compose_service(
+        async fn restart_compose_service(
             &self,
             _compose_file: &Path,
             _service_name: &str,
-        ) -> impl Future<Output = Result<()>> + Send {
-            async { Err(eyre::eyre!("restart failed")) }
+        ) -> Result<()> {
+            Err(eyre::eyre!("restart failed"))
         }
 
-        fn compose_up_service(
+        async fn compose_up_service(
             &self,
             _compose_file: &Path,
             _service_name: &str,
-        ) -> impl Future<Output = Result<()>> + Send {
-            async { Err(eyre::eyre!("compose up failed")) }
+        ) -> Result<()> {
+            Err(eyre::eyre!("compose up failed"))
         }
     }
 
