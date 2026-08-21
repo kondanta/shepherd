@@ -3,7 +3,7 @@ pub mod github;
 pub mod image;
 pub mod webhook;
 
-use docker::DockerClient;
+use docker::{DockerClient, DockerExecutor};
 use github::GitHubClient;
 use image::ImageReference;
 
@@ -59,8 +59,8 @@ pub struct Deployment {
 ///
 /// Concurrent webhook deliveries are serialized by an internal semaphore —
 /// the HTTP response is immediate, but the actual deploy work is queued.
-pub struct DeploymentOrchestrator {
-    docker_client: DockerClient,
+pub struct DeploymentOrchestrator<D: DockerExecutor = DockerClient> {
+    docker_client: D,
     github_client: GitHubClient,
     root_dir: PathBuf,
     repo_path_prefix: Option<String>,
@@ -78,10 +78,20 @@ pub struct DeploymentOrchestrator {
     deploy_semaphore: tokio::sync::Semaphore,
 }
 
-impl DeploymentOrchestrator {
+impl DeploymentOrchestrator<DockerClient> {
     pub async fn new(config: &Config, flags: SharedFlags) -> Result<Self> {
+        Self::with_executor(config, flags, DockerClient::new().await?).await
+    }
+}
+
+impl<D: DockerExecutor> DeploymentOrchestrator<D> {
+    pub async fn with_executor(
+        config: &Config,
+        flags: SharedFlags,
+        docker: D,
+    ) -> Result<Self> {
         Ok(Self {
-            docker_client: DockerClient::new().await?,
+            docker_client: docker,
             github_client: GitHubClient::new(config.github_token.clone()),
             root_dir: PathBuf::from(&config.root_dir),
             repo_path_prefix: config.repo_path_prefix.clone(),
@@ -630,17 +640,46 @@ fn duration_secs(d: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::walk::ServiceEntry;
-    use std::path::PathBuf;
+    use crate::{container::docker::DockerExecutor, fs::walk::ServiceEntry};
+    use std::{future::Future, path::PathBuf};
 
-    /// Minimal orchestrator for tests that exercise pure logic (no docker calls
-    /// happen during construction; docker IS needed because DockerClient::new
-    /// verifies the compose plugin is present).
-    async fn test_orchestrator() -> DeploymentOrchestrator {
+    #[derive(Clone, Default)]
+    struct FailingDockerExecutor;
+
+    impl DockerExecutor for FailingDockerExecutor {
+        fn pull_image(
+            &self,
+            _image: &str,
+        ) -> impl Future<Output = Result<()>> + Send {
+            async { Err(eyre::eyre!("docker pull failed")) }
+        }
+
+        fn restart_compose_service(
+            &self,
+            _compose_file: &Path,
+            _service_name: &str,
+        ) -> impl Future<Output = Result<()>> + Send {
+            async { Err(eyre::eyre!("restart failed")) }
+        }
+
+        fn compose_up_service(
+            &self,
+            _compose_file: &Path,
+            _service_name: &str,
+        ) -> impl Future<Output = Result<()>> + Send {
+            async { Err(eyre::eyre!("compose up failed")) }
+        }
+    }
+
+    async fn fake_orchestrator()
+    -> DeploymentOrchestrator<crate::container::docker::CapturingDockerExecutor>
+    {
         use crate::{
             config::{Config, Mode},
+            container::docker::CapturingDockerExecutor,
             features,
         };
+
         let config = Config {
             root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
             log_level: "info".to_string(),
@@ -657,9 +696,13 @@ mod tests {
             #[cfg(feature = "otlp")]
             otlp_endpoint: "http://localhost:4317".to_string(),
         };
-        DeploymentOrchestrator::new(&config, features::new_flags())
-            .await
-            .expect("DeploymentOrchestrator::new failed — is docker installed?")
+        DeploymentOrchestrator::with_executor(
+            &config,
+            features::new_flags(),
+            CapturingDockerExecutor::new(),
+        )
+        .await
+        .expect("DeploymentOrchestrator::new failed — is docker installed?")
     }
 
     fn push_payload(
@@ -694,7 +737,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_webhook_ignores_non_default_branch() {
-        let orch = test_orchestrator().await;
+        let orch = fake_orchestrator().await;
         let payload = push_payload(
             "refs/heads/feature/my-branch",
             "main",
@@ -705,7 +748,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_webhook_ignores_non_renovate_commit() {
-        let orch = test_orchestrator().await;
+        let orch = fake_orchestrator().await;
         let payload = push_payload(
             "refs/heads/main",
             "main",
@@ -724,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_webhook_ignores_no_compose_files() {
-        let orch = test_orchestrator().await;
+        let orch = fake_orchestrator().await;
         let payload = push_payload(
             "refs/heads/main",
             "main",
@@ -863,5 +906,130 @@ mod tests {
         let old = vec![];
         let new = vec![make_service("web", "nginx:latest", "image: nginx:latest")];
         assert_eq!(diff_services(&old, new, true).len(), 1);
+    }
+    //  -- deploy_service --
+    #[tokio::test]
+    async fn deploy_service_records_failure_in_history() {
+        use crate::{
+            config::{Config, Mode},
+            features,
+        };
+        let config = Config {
+            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            renovate_username: "renovate[bot]".to_string(),
+            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
+            github_token: None,
+            allow_latest_images: false,
+            api_token: None,
+            mode: Mode::Webhook { secret: "test".to_string() },
+            service_filter: None,
+            repo_path_prefix: None,
+            initial_sync: true,
+            shepherd_service_name: None,
+            #[cfg(feature = "otlp")]
+            otlp_endpoint: "http://localhost:4317".to_string(),
+        };
+        let orch = DeploymentOrchestrator::with_executor(
+            &config,
+            features::new_flags(),
+            FailingDockerExecutor,
+        )
+        .await
+        .unwrap();
+        let svc = make_service("web", "nginx:1.25", "image: nginx:1.25");
+
+        let _ = orch.deploy_service(svc, None).await; // expected to fail
+
+        let history = orch.list_deployments();
+        assert_eq!(history.len(), 1);
+        assert!(matches!(history[0].status, DeploymentStatus::Failed));
+    }
+
+    #[tokio::test]
+    async fn deploy_service_blocked_by_service_filter() {
+        use crate::container::docker::CapturingDockerExecutor;
+        use crate::{
+            config::{Config, Mode},
+            features,
+        };
+        let config = Config {
+            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            renovate_username: "renovate[bot]".to_string(),
+            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
+            github_token: None,
+            allow_latest_images: false,
+            api_token: None,
+            mode: Mode::Webhook { secret: "test".to_string() },
+            service_filter: Some(vec!["allowed".to_string()]),
+            repo_path_prefix: None,
+            initial_sync: true,
+            shepherd_service_name: None,
+            #[cfg(feature = "otlp")]
+            otlp_endpoint: "http://localhost:4317".to_string(),
+        };
+        let executor = CapturingDockerExecutor::new();
+        let orch = DeploymentOrchestrator::with_executor(
+            &config,
+            features::new_flags(),
+            executor.clone(),
+        )
+        .await
+        .unwrap();
+        let svc = make_service("blocked", "nginx:1.25", "image: nginx:1.25");
+
+        let result = orch.deploy_service(svc, None).await;
+
+        assert!(result.is_err());
+        assert!(executor.calls().is_empty(), "no docker calls should be made");
+    }
+
+    #[tokio::test]
+    async fn deploy_service_records_success_in_history() {
+        use crate::container::docker::{CapturingDockerExecutor, DockerCall};
+        let executor = CapturingDockerExecutor::new();
+        let calls = executor.calls.clone(); // Arc<Mutex<Vec<DockerCall>>>
+
+        use crate::{
+            config::{Config, Mode},
+            features,
+        };
+        let config = Config {
+            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            renovate_username: "renovate[bot]".to_string(),
+            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
+            github_token: None,
+            allow_latest_images: false,
+            api_token: None,
+            mode: Mode::Webhook { secret: "test".to_string() },
+            service_filter: None,
+            repo_path_prefix: None,
+            initial_sync: true,
+            shepherd_service_name: None,
+            #[cfg(feature = "otlp")]
+            otlp_endpoint: "http://localhost:4317".to_string(),
+        };
+        let orch = DeploymentOrchestrator::with_executor(
+            &config,
+            features::new_flags(),
+            executor,
+        )
+        .await
+        .unwrap();
+        let svc = make_service("web", "nginx:1.25", "image: nginx:1.25");
+
+        orch.deploy_service(svc, None).await.unwrap();
+
+        let history = orch.list_deployments();
+        assert_eq!(history.len(), 1);
+        assert!(matches!(history[0].status, DeploymentStatus::Success));
+
+        let recorded = calls.lock().unwrap();
+        assert!(
+            matches!(&recorded[0], DockerCall::PullImage(img) if img == "nginx:1.25")
+        );
+        assert!(matches!(&recorded[1], DockerCall::RestartService { .. }));
     }
 }
