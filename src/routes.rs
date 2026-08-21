@@ -14,8 +14,11 @@ use subtle::ConstantTimeEq;
 
 use crate::config::Config;
 use crate::container::{
-    self, Deployment, DeploymentOrchestrator, webhook::WebhookEvent,
+    self, Deployment, DeploymentOrchestrator,
+    docker::{DockerClient, DockerExecutor},
+    webhook::WebhookEvent,
 };
+
 use crate::features::SharedFlags;
 
 #[cfg(feature = "metrics")]
@@ -25,15 +28,15 @@ use axum_prometheus::PrometheusMetricLayer;
 use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer};
 
 #[derive(Clone)]
-pub struct AppState {
+pub struct AppState<D: DockerExecutor = DockerClient> {
     pub config: Arc<Config>,
-    pub orchestrator: Arc<DeploymentOrchestrator>,
+    pub orchestrator: Arc<DeploymentOrchestrator<D>>,
     pub flags: SharedFlags,
 }
 
 /// Build the complete router. This is the single place that owns all route
 /// definitions and their middleware — `main` just binds and serves.
-pub fn router(state: AppState) -> axum::Router {
+pub fn router<D: DockerExecutor>(state: AppState<D>) -> axum::Router {
     if state.config.api_token.is_none() {
         tracing::warn!("API_TOKEN not set; /flags/* endpoints will return 401");
     }
@@ -94,8 +97,8 @@ fn unauthorized(reason: &str) -> Response {
         .into_response()
 }
 
-pub async fn require_api_token(
-    State(state): State<AppState>,
+pub async fn require_api_token<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
@@ -169,8 +172,8 @@ pub(crate) struct ReadyChecks {
 ///
 /// Answers "should k8s restart this pod?". Checks only that ROOT_DIR is
 /// accessible. Intentionally lightweight: no subprocess, no network calls.
-pub(crate) async fn health_check(
-    State(state): State<AppState>,
+pub(crate) async fn health_check<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
 ) -> (StatusCode, Json<HealthResponse>) {
     let root_dir = &state.config.root_dir;
     match tokio::fs::metadata(root_dir).await {
@@ -197,8 +200,8 @@ pub(crate) async fn health_check(
 /// Answers "should k8s send traffic to this pod?". Runs both checks
 /// independently so the response always shows per-check detail regardless
 /// of which one fails.
-pub(crate) async fn readiness_check(
-    State(state): State<AppState>,
+pub(crate) async fn readiness_check<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
 ) -> (StatusCode, Json<ReadyResponse>) {
     let (root_dir_result, docker_result) = tokio::join!(
         tokio::fs::metadata(&state.config.root_dir),
@@ -248,8 +251,8 @@ pub struct ManagedServicesResponse {
     pub total: usize,
 }
 
-pub async fn list_managed_services(
-    State(state): State<AppState>,
+pub async fn list_managed_services<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
 ) -> Result<Json<ManagedServicesResponse>, StatusCode> {
     let services = state.orchestrator.get_managed_services().await.map_err(|e| {
         tracing::error!("Failed to get managed services: {:?}", e);
@@ -259,8 +262,8 @@ pub async fn list_managed_services(
     Ok(Json(ManagedServicesResponse { services, total }))
 }
 
-pub async fn github_webhook(
-    State(state): State<AppState>,
+pub async fn github_webhook<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
     headers: HeaderMap,
     body: Bytes,
 ) -> StatusCode {
@@ -332,8 +335,8 @@ pub async fn github_webhook(
     StatusCode::ACCEPTED
 }
 
-pub async fn list_deployments(
-    State(state): State<AppState>,
+pub async fn list_deployments<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
 ) -> Json<Vec<Deployment>> {
     Json(state.orchestrator.list_deployments())
 }
@@ -347,8 +350,8 @@ pub struct ManualDeployRequest {
     pub image: Option<String>,
 }
 
-pub async fn manual_deploy(
-    State(state): State<AppState>,
+pub async fn manual_deploy<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
     Json(req): Json<ManualDeployRequest>,
 ) -> StatusCode {
     if state.flags.load().deployments_paused {
@@ -381,7 +384,9 @@ pub async fn manual_deploy(
     StatusCode::ACCEPTED
 }
 
-pub async fn trigger_sync(State(state): State<AppState>) -> StatusCode {
+pub async fn trigger_sync<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
+) -> StatusCode {
     if state.flags.load().deployments_paused {
         tracing::info!("Deployments paused, rejecting sync request");
         return StatusCode::SERVICE_UNAVAILABLE;
@@ -403,7 +408,9 @@ pub struct FlagsResponse {
     pub dry_run: bool,
 }
 
-pub async fn get_flags(State(state): State<AppState>) -> Json<FlagsResponse> {
+pub async fn get_flags<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
+) -> Json<FlagsResponse> {
     let f = state.flags.load();
     Json(FlagsResponse {
         deployments_paused: f.deployments_paused,
@@ -411,7 +418,9 @@ pub async fn get_flags(State(state): State<AppState>) -> Json<FlagsResponse> {
     })
 }
 
-pub async fn pause_deployments(State(state): State<AppState>) -> StatusCode {
+pub async fn pause_deployments<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
+) -> StatusCode {
     state.flags.rcu(|f| crate::features::RuntimeFlags {
         deployments_paused: true,
         ..(**f).clone()
@@ -421,7 +430,9 @@ pub async fn pause_deployments(State(state): State<AppState>) -> StatusCode {
     StatusCode::OK
 }
 
-pub async fn resume_deployments(State(state): State<AppState>) -> StatusCode {
+pub async fn resume_deployments<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
+) -> StatusCode {
     state.flags.rcu(|f| crate::features::RuntimeFlags {
         deployments_paused: false,
         ..(**f).clone()
@@ -431,7 +442,9 @@ pub async fn resume_deployments(State(state): State<AppState>) -> StatusCode {
     StatusCode::OK
 }
 
-pub async fn enable_dry_run(State(state): State<AppState>) -> StatusCode {
+pub async fn enable_dry_run<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
+) -> StatusCode {
     state
         .flags
         .rcu(|f| crate::features::RuntimeFlags { dry_run: true, ..(**f).clone() });
@@ -440,7 +453,9 @@ pub async fn enable_dry_run(State(state): State<AppState>) -> StatusCode {
     StatusCode::OK
 }
 
-pub async fn disable_dry_run(State(state): State<AppState>) -> StatusCode {
+pub async fn disable_dry_run<D: DockerExecutor>(
+    State(state): State<AppState<D>>,
+) -> StatusCode {
     state
         .flags
         .rcu(|f| crate::features::RuntimeFlags { dry_run: false, ..(**f).clone() });
@@ -513,9 +528,12 @@ mod tests {
     /// Requires docker to be installed (DeploymentOrchestrator::new calls
     /// `docker compose version` on startup). Tests are not marked #[ignore]
     /// because docker is available in this project's CI environment.
-    async fn test_state(api_token: Option<&str>) -> AppState {
+    async fn test_state(
+        api_token: Option<&str>,
+    ) -> AppState<crate::container::docker::CapturingDockerExecutor> {
         use crate::{
             config::{Config, Mode},
+            container::docker::CapturingDockerExecutor,
             features,
         };
         let config = Arc::new(Config {
@@ -535,14 +553,17 @@ mod tests {
             otlp_endpoint: "http://localhost:4317".to_string(),
         });
         let flags = features::new_flags();
-        let orchestrator =
-            crate::container::DeploymentOrchestrator::new(&config, flags.clone())
-                .await
-                .expect("DeploymentOrchestrator::new failed — is docker installed?");
+        let orchestrator = crate::container::DeploymentOrchestrator::with_executor(
+            &config,
+            flags.clone(),
+            CapturingDockerExecutor::new(),
+        )
+        .await
+        .expect("DeploymentOrchestrator::new failed — is docker installed?");
         AppState { config, orchestrator: Arc::new(orchestrator), flags }
     }
 
-    fn token_test_app(state: AppState) -> axum::Router {
+    fn token_test_app<D: DockerExecutor>(state: AppState<D>) -> axum::Router {
         axum::Router::new()
             .route("/", get(|| async { StatusCode::OK }))
             .route_layer(axum::middleware::from_fn_with_state(

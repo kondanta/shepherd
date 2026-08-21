@@ -1,28 +1,60 @@
 use color_eyre::Result;
 use eyre::{WrapErr, eyre};
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{future::Future, path::Path, process::Stdio, time::Duration};
 use tokio::{process::Command as TokioCommand, time::timeout};
 
 // Per-operation ceiling: kills the docker child on expiry via kill_on_drop(true).
 const DOCKER_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Provides an interface for Docker container lifecycle operations.
+///
+/// Implementations allow pulling images and managing Docker Compose services,
+/// enabling unit testing via mocks or fake implementations.
+pub trait DockerExecutor: Clone + Send + Sync + 'static {
+    /// Pulls a target container image from a registry
+    fn pull_image(&self, image: &str) -> impl Future<Output = Result<()>> + Send;
+
+    /// Forces a restart and recreation of a specific Compose service
+    fn restart_compose_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Starts or updates a single service defined in a Compose file without recreating dependencies
+    fn compose_up_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+}
+
+#[derive(Clone)]
 pub struct DockerClient {
+    /// System path to the local `docker` executable
     docker_bin: String,
 }
 
 impl DockerClient {
+    /// Creates a new DockerClient
+    ///
+    /// Returns an error if the docker binary cannot be located on 'PATH'
+    /// or if docker compose (v2) is unavailable.
     pub async fn new() -> Result<Self> {
         let docker_bin = Self::find_executable("docker")?;
         Self::verify_compose_available().await?;
         Ok(Self { docker_bin })
     }
 
+    /// Resolves the absolute system path for a given binary name using the environment 'PATH'
     fn find_executable(name: &str) -> Result<String> {
         which::which(name)
             .wrap_err_with(|| format!("Failed to find executable: {}", name))
             .map(|p| p.to_string_lossy().to_string())
     }
 
+    /// Verifies that the docker compose V2 is installed
+    /// V2 means `docker compose`.
     pub(crate) async fn verify_compose_available() -> Result<()> {
         let ok = TokioCommand::new("docker")
             .args(["compose", "version"])
@@ -131,6 +163,105 @@ impl DockerClient {
     }
 }
 
+impl DockerExecutor for DockerClient {
+    fn pull_image(&self, image: &str) -> impl Future<Output = Result<()>> + Send {
+        let image = image.to_owned();
+        async move { self.pull_image(&image).await }
+    }
+
+    fn restart_compose_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let path = compose_file.to_owned();
+        let name = service_name.to_owned();
+        async move { self.restart_compose_service(&path, &name).await }
+    }
+
+    fn compose_up_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let path = compose_file.to_owned();
+        let name = service_name.to_owned();
+        async move { self.compose_up_service(&path, &name).await }
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)] // This enum is testing only. I'll keep the variables as is.
+#[derive(Debug, Clone)]
+pub enum DockerCall {
+    PullImage(String),
+    RestartService { path: std::path::PathBuf, service: String },
+    ComposeUp { path: std::path::PathBuf, service: String },
+}
+
+#[cfg(test)]
+use std::sync::{Arc, Mutex};
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub struct CapturingDockerExecutor {
+    pub calls: Arc<Mutex<Vec<DockerCall>>>,
+}
+
+#[cfg(test)]
+impl CapturingDockerExecutor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn calls(&self) -> Vec<DockerCall> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+impl DockerExecutor for CapturingDockerExecutor {
+    fn pull_image(&self, image: &str) -> impl Future<Output = Result<()>> + Send {
+        let image = image.to_owned();
+        async move {
+            self.calls.lock().unwrap().push(DockerCall::PullImage(image));
+            Ok(())
+        }
+    }
+
+    fn restart_compose_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let path = compose_file.to_owned();
+        let name = service_name.to_owned();
+        async move {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(DockerCall::RestartService { path, service: name });
+            Ok(())
+        }
+    }
+
+    fn compose_up_service(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let path = compose_file.to_owned();
+        let name = service_name.to_owned();
+        async move {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(DockerCall::ComposeUp { path, service: name });
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,14 +279,18 @@ mod tests {
             .expect("Failed to remove test image");
     }
 
+    // Instead of relying on underlying host to provide container runtime, we use mocked version
     #[tokio::test]
-    async fn test_find_docker() {
-        assert!(DockerClient::find_executable("docker").is_ok());
-    }
+    async fn test_docker_executor_logic_with_fake() {
+        let executor = CapturingDockerExecutor::new();
+        let compose_path = std::path::Path::new("docker-compose.yaml");
 
-    #[tokio::test]
-    async fn test_verify_compose_available() {
-        let result = DockerClient::verify_compose_available().await;
-        assert!(result.is_ok(), "docker compose not available: {result:?}");
+        executor.pull_image("alpine:latest").await.unwrap();
+        executor.compose_up_service(compose_path, "web").await.unwrap();
+        executor.compose_up_service(compose_path, "db").await.unwrap();
+
+        let calls = executor.calls();
+        assert_eq!(calls.len(), 3);
+        assert!(matches!(calls[0], DockerCall::PullImage(_)));
     }
 }

@@ -1,12 +1,16 @@
-use crate::container::{DeploymentOrchestrator, github::GitHubClient};
+use crate::container::{
+    DeploymentOrchestrator,
+    docker::{DockerClient, DockerExecutor},
+    github::GitHubClient,
+};
 use crate::features::SharedFlags;
 use color_eyre::Result;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub struct Poller {
-    orchestrator: Arc<DeploymentOrchestrator>,
+pub struct Poller<D: DockerExecutor = DockerClient> {
+    orchestrator: Arc<DeploymentOrchestrator<D>>,
     // TODO: consolidate with DeploymentOrchestrator's github_client once the
     // Poller and Orchestrator are unified or the client is made cheaply clonable.
     github: GitHubClient,
@@ -21,9 +25,9 @@ pub struct Poller {
     last_sha: Mutex<Option<String>>,
 }
 
-impl Poller {
+impl<D: DockerExecutor> Poller<D> {
     pub fn new(
-        orchestrator: Arc<DeploymentOrchestrator>,
+        orchestrator: Arc<DeploymentOrchestrator<D>>,
         flags: SharedFlags,
         config: &crate::config::Config,
     ) -> Self {
