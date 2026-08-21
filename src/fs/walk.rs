@@ -29,7 +29,7 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
 
         tracing::debug!("Visiting path: {:?}", path);
 
-        if path.extension().map(|e| e == "yaml" || e == "yml").unwrap_or(false) {
+        if path.extension().map(|e| e == "yaml").unwrap_or(false) {
             tracing::debug!("Parsing YAML file: {:?}", path);
             match parse_yaml_file(path) {
                 Ok(entries) => results.extend(entries),
