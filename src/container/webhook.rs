@@ -95,7 +95,7 @@ impl WebhookPayload {
         self.git_ref == format!("refs/heads/{}", self.repository.default_branch)
     }
 
-    /// Returns compose files (*.yaml / *.yml) touched by Renovate-authored commits only.
+    /// Returns compose files (*.yaml) touched by Renovate-authored commits only.
     ///
     /// Filtering by author here (rather than as a separate `is_renovate_commit` guard)
     /// prevents human commits in a mixed push from being auto-deployed alongside
@@ -121,7 +121,7 @@ impl WebhookPayload {
                 )
             })
             .flat_map(|c| c.modified.iter().chain(c.added.iter()))
-            .filter(|f| f.ends_with(".yaml") || f.ends_with(".yml"))
+            .filter(|f| f.ends_with(".yaml"))
             .cloned()
             .collect()
     }
