@@ -27,6 +27,8 @@ pub trait DockerExecutor: Clone + Send + Sync + 'static {
         compose_file: &Path,
         service_name: &str,
     ) -> impl Future<Output = Result<()>> + Send;
+
+    fn check_available(&self) -> impl Future<Output = bool> + Send;
 }
 
 #[derive(Clone)]
@@ -164,29 +166,33 @@ impl DockerClient {
 }
 
 impl DockerExecutor for DockerClient {
-    fn pull_image(&self, image: &str) -> impl Future<Output = Result<()>> + Send {
+    async fn pull_image(&self, image: &str) -> Result<()> {
         let image = image.to_owned();
-        async move { self.pull_image(&image).await }
+        self.pull_image(&image).await
     }
 
-    fn restart_compose_service(
+    async fn restart_compose_service(
         &self,
         compose_file: &Path,
         service_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send {
+    ) -> Result<()> {
         let path = compose_file.to_owned();
         let name = service_name.to_owned();
-        async move { self.restart_compose_service(&path, &name).await }
+        self.restart_compose_service(&path, &name).await
     }
 
-    fn compose_up_service(
+    async fn compose_up_service(
         &self,
         compose_file: &Path,
         service_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send {
+    ) -> Result<()> {
         let path = compose_file.to_owned();
         let name = service_name.to_owned();
-        async move { self.compose_up_service(&path, &name).await }
+        self.compose_up_service(&path, &name).await
+    }
+
+    async fn check_available(&self) -> bool {
+        Self::verify_compose_available().await.is_ok()
     }
 }
 
@@ -221,44 +227,37 @@ impl CapturingDockerExecutor {
 
 #[cfg(test)]
 impl DockerExecutor for CapturingDockerExecutor {
-    fn pull_image(&self, image: &str) -> impl Future<Output = Result<()>> + Send {
-        let image = image.to_owned();
-        async move {
-            self.calls.lock().unwrap().push(DockerCall::PullImage(image));
-            Ok(())
-        }
+    async fn pull_image(&self, image: &str) -> Result<()> {
+        self.calls.lock().unwrap().push(DockerCall::PullImage(image.to_string()));
+        Ok(())
     }
 
-    fn restart_compose_service(
+    async fn restart_compose_service(
         &self,
         compose_file: &Path,
         service_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send {
-        let path = compose_file.to_owned();
-        let name = service_name.to_owned();
-        async move {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(DockerCall::RestartService { path, service: name });
-            Ok(())
-        }
+    ) -> Result<()> {
+        self.calls.lock().unwrap().push(DockerCall::RestartService {
+            path: compose_file.to_path_buf(),
+            service: service_name.to_string(),
+        });
+        Ok(())
     }
 
-    fn compose_up_service(
+    async fn compose_up_service(
         &self,
         compose_file: &Path,
         service_name: &str,
-    ) -> impl Future<Output = Result<()>> + Send {
-        let path = compose_file.to_owned();
-        let name = service_name.to_owned();
-        async move {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(DockerCall::ComposeUp { path, service: name });
-            Ok(())
-        }
+    ) -> Result<()> {
+        self.calls.lock().unwrap().push(DockerCall::ComposeUp {
+            path: compose_file.to_path_buf(),
+            service: service_name.to_string(),
+        });
+        Ok(())
+    }
+
+    async fn check_available(&self) -> bool {
+        true
     }
 }
 
