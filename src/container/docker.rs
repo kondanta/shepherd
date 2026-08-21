@@ -44,7 +44,7 @@ impl DockerClient {
     /// or if docker compose (v2) is unavailable.
     pub async fn new() -> Result<Self> {
         let docker_bin = Self::find_executable("docker")?;
-        Self::verify_compose_available().await?;
+        Self::verify_compose_available(&docker_bin).await?;
         Ok(Self { docker_bin })
     }
 
@@ -57,8 +57,8 @@ impl DockerClient {
 
     /// Verifies that the docker compose V2 is installed
     /// V2 means `docker compose`.
-    pub(crate) async fn verify_compose_available() -> Result<()> {
-        let ok = TokioCommand::new("docker")
+    pub(crate) async fn verify_compose_available(docker_bin: &str) -> Result<()> {
+        let ok = TokioCommand::new(docker_bin)
             .args(["compose", "version"])
             .output()
             .await
@@ -192,7 +192,7 @@ impl DockerExecutor for DockerClient {
     }
 
     async fn check_available(&self) -> bool {
-        Self::verify_compose_available().await.is_ok()
+        Self::verify_compose_available(&self.docker_bin).await.is_ok()
     }
 }
 
