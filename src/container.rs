@@ -15,7 +15,7 @@ use eyre::{WrapErr, eyre};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Maximum time to wait for the deploy semaphore before returning an error.
@@ -61,14 +61,8 @@ pub struct Deployment {
 /// the HTTP response is immediate, but the actual deploy work is queued.
 pub struct DeploymentOrchestrator<D: DockerExecutor = DockerClient> {
     docker_client: D,
-    github_client: GitHubClient,
-    root_dir: PathBuf,
-    repo_path_prefix: Option<String>,
-    service_filter: Option<Vec<String>>,
-    renovate_username: String,
-    renovate_email: String,
-    allow_latest: bool,
-    shepherd_service_name: Option<String>,
+    github_client: Arc<GitHubClient>,
+    config: Arc<Config>,
     flags: SharedFlags,
     /// Deployment history, capped at 200 entries. Uses a std Mutex because
     /// the critical section is microseconds — just a VecDeque push.
@@ -79,37 +73,37 @@ pub struct DeploymentOrchestrator<D: DockerExecutor = DockerClient> {
 }
 
 impl DeploymentOrchestrator<DockerClient> {
-    pub async fn new(config: &Config, flags: SharedFlags) -> Result<Self> {
-        Self::with_executor(config, flags, DockerClient::new().await?).await
+    pub async fn new(config: Arc<Config>, flags: SharedFlags) -> Result<Self> {
+        let github_client = Arc::new(GitHubClient::new(config.github_token.clone()));
+        Self::with_executor(config, github_client, flags, DockerClient::new().await?).await
     }
 }
 
 impl<D: DockerExecutor> DeploymentOrchestrator<D> {
     pub async fn with_executor(
-        config: &Config,
+        config: Arc<Config>,
+        github_client: Arc<GitHubClient>,
         flags: SharedFlags,
         docker: D,
     ) -> Result<Self> {
         Ok(Self {
             docker_client: docker,
-            github_client: GitHubClient::new(config.github_token.clone()),
-            root_dir: PathBuf::from(&config.root_dir),
-            repo_path_prefix: config.repo_path_prefix.clone(),
-            service_filter: config.service_filter.clone(),
-            renovate_username: config.renovate_username.clone(),
-            renovate_email: config.renovate_email.clone(),
-            allow_latest: config.allow_latest_images,
-            shepherd_service_name: config.shepherd_service_name.clone(),
+            github_client,
+            config,
             flags,
             history: Mutex::new(VecDeque::new()),
             deploy_semaphore: tokio::sync::Semaphore::new(1),
         })
     }
 
+    pub fn github_client(&self) -> Arc<GitHubClient> {
+        Arc::clone(&self.github_client)
+    }
+
     // ── public API ────────────────────────────────────────────────────────────
 
     pub async fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
-        let root = self.root_dir.clone();
+        let root = PathBuf::from(&self.config.root_dir);
         let services = tokio::task::spawn_blocking(move || {
             crate::fs::walk::scan_filesystem(&root)
         })
@@ -150,7 +144,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
         let service = match image {
             Some(img) => {
                 let image_ref = ImageReference::parse(&img)?;
-                check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
+                check_tag_policy(&service.name, &image_ref, self.config.allow_latest_images)?;
                 let (path, name, img_for_write) =
                     (service.path.clone(), service.name.clone(), img.clone());
                 tokio::task::spawn_blocking(move || {
@@ -172,7 +166,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
             }
             None => {
                 let image_ref = ImageReference::parse(&service.image)?;
-                check_tag_policy(&service.name, &image_ref, self.allow_latest)?;
+                check_tag_policy(&service.name, &image_ref, self.config.allow_latest_images)?;
                 service
             }
         };
@@ -210,7 +204,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
                 }
             };
             if let Err(e) =
-                check_tag_policy(&service.name, &image_ref, self.allow_latest)
+                check_tag_policy(&service.name, &image_ref, self.config.allow_latest_images)
             {
                 tracing::warn!("{e}");
                 continue;
@@ -251,7 +245,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
             return Ok(());
         }
         let modified: Vec<String> = payload
-            .modified_compose_files(&self.renovate_username, &self.renovate_email)
+            .modified_compose_files(&self.config.renovate_username, &self.config.renovate_email)
             .into_iter()
             .collect();
         if modified.is_empty() {
@@ -311,7 +305,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
                 .await
             {
                 Ok((old, new)) => to_restart.extend(
-                    diff_services(&old, new, self.allow_latest).into_iter().filter(
+                    diff_services(&old, new, self.config.allow_latest_images).into_iter().filter(
                         |s| {
                             if self.is_service_allowed(&s.name) {
                                 true
@@ -336,12 +330,13 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
 
         // Sort so shepherd itself always deploys last. This ensures sibling
         // services are running before shepherd replaces its own container.
-        if let Some(self_name) = &self.shepherd_service_name {
+        if let Some(self_name) = &self.config.shepherd_service_name {
             to_restart.sort_by_key(|s| s.name.eq_ignore_ascii_case(self_name));
         }
 
         for service in to_restart {
             if self
+                .config
                 .shepherd_service_name
                 .as_deref()
                 .is_some_and(|n| n.eq_ignore_ascii_case(&service.name))
@@ -364,13 +359,13 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
     // ── internals ─────────────────────────────────────────────────────────────
 
     fn strip_repo_prefix<'a>(&self, github_path: &'a str) -> Option<&'a str> {
-        strip_repo_prefix_inner(self.repo_path_prefix.as_deref(), github_path)
+        strip_repo_prefix_inner(self.config.repo_path_prefix.as_deref(), github_path)
     }
 
     /// Returns true if the service is allowed to be deployed on this instance.
     /// When no filter is configured, all services are allowed.
     fn is_service_allowed(&self, name: &str) -> bool {
-        match &self.service_filter {
+        match &self.config.service_filter {
             None => true,
             Some(filter) => filter.iter().any(|f| f.eq_ignore_ascii_case(name)),
         }
@@ -405,7 +400,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
             return Err(eyre!("Rejected suspicious file path: {local_rel:?}"));
         }
 
-        let local_path = self.root_dir.join(local_rel);
+        let local_path = PathBuf::from(&self.config.root_dir).join(local_rel);
 
         let old_services = if local_path.exists() {
             crate::fs::walk::parse_yaml_file(&local_path).unwrap_or_default()
@@ -429,7 +424,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
         // If a service filter is set and none of the services in this file
         // match it, skip the write entirely — no point creating files or
         // directories for services this instance will never deploy.
-        if self.service_filter.is_some()
+        if self.config.service_filter.is_some()
             && !new_services.iter().any(|s| self.is_service_allowed(&s.name))
         {
             tracing::debug!("Skipping file: no services match SERVICE_FILTER");
@@ -672,34 +667,20 @@ mod tests {
     -> DeploymentOrchestrator<crate::container::docker::CapturingDockerExecutor>
     {
         use crate::{
-            config::{Config, Mode},
-            container::docker::CapturingDockerExecutor,
+            config::Config,
+            container::{docker::CapturingDockerExecutor, github::GitHubClient},
             features,
         };
-
-        let config = Config {
-            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            log_level: "info".to_string(),
-            renovate_username: "renovate[bot]".to_string(),
-            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
-            github_token: None,
-            allow_latest_images: false,
-            api_token: None,
-            mode: Mode::Webhook { secret: "test".to_string() },
-            service_filter: None,
-            repo_path_prefix: None,
-            initial_sync: true,
-            shepherd_service_name: None,
-            #[cfg(feature = "otlp")]
-            otlp_endpoint: "http://localhost:4317".to_string(),
-        };
+        let config = std::sync::Arc::new(Config::for_test(None));
+        let github_client = std::sync::Arc::new(GitHubClient::new(None));
         DeploymentOrchestrator::with_executor(
-            &config,
+            config,
+            github_client,
             features::new_flags(),
             CapturingDockerExecutor::new(),
         )
         .await
-        .expect("DeploymentOrchestrator::new failed — is docker installed?")
+        .expect("DeploymentOrchestrator::with_executor failed")
     }
 
     fn push_payload(
@@ -907,28 +888,12 @@ mod tests {
     //  -- deploy_service --
     #[tokio::test]
     async fn deploy_service_records_failure_in_history() {
-        use crate::{
-            config::{Config, Mode},
-            features,
-        };
-        let config = Config {
-            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            log_level: "info".to_string(),
-            renovate_username: "renovate[bot]".to_string(),
-            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
-            github_token: None,
-            allow_latest_images: false,
-            api_token: None,
-            mode: Mode::Webhook { secret: "test".to_string() },
-            service_filter: None,
-            repo_path_prefix: None,
-            initial_sync: true,
-            shepherd_service_name: None,
-            #[cfg(feature = "otlp")]
-            otlp_endpoint: "http://localhost:4317".to_string(),
-        };
+        use crate::{config::Config, container::github::GitHubClient, features};
+        let config = std::sync::Arc::new(Config::for_test(None));
+        let github_client = std::sync::Arc::new(GitHubClient::new(None));
         let orch = DeploymentOrchestrator::with_executor(
-            &config,
+            config,
+            github_client,
             features::new_flags(),
             FailingDockerExecutor,
         )
@@ -945,30 +910,20 @@ mod tests {
 
     #[tokio::test]
     async fn deploy_service_blocked_by_service_filter() {
-        use crate::container::docker::CapturingDockerExecutor;
         use crate::{
-            config::{Config, Mode},
+            config::Config,
+            container::{docker::CapturingDockerExecutor, github::GitHubClient},
             features,
         };
-        let config = Config {
-            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            log_level: "info".to_string(),
-            renovate_username: "renovate[bot]".to_string(),
-            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
-            github_token: None,
-            allow_latest_images: false,
-            api_token: None,
-            mode: Mode::Webhook { secret: "test".to_string() },
+        let config = std::sync::Arc::new(Config {
             service_filter: Some(vec!["allowed".to_string()]),
-            repo_path_prefix: None,
-            initial_sync: true,
-            shepherd_service_name: None,
-            #[cfg(feature = "otlp")]
-            otlp_endpoint: "http://localhost:4317".to_string(),
-        };
+            ..Config::for_test(None)
+        });
+        let github_client = std::sync::Arc::new(GitHubClient::new(None));
         let executor = CapturingDockerExecutor::new();
         let orch = DeploymentOrchestrator::with_executor(
-            &config,
+            config,
+            github_client,
             features::new_flags(),
             executor.clone(),
         )
@@ -984,32 +939,21 @@ mod tests {
 
     #[tokio::test]
     async fn deploy_service_records_success_in_history() {
-        use crate::container::docker::{CapturingDockerExecutor, DockerCall};
-        let executor = CapturingDockerExecutor::new();
-        let calls = executor.calls.clone(); // Arc<Mutex<Vec<DockerCall>>>
-
         use crate::{
-            config::{Config, Mode},
+            config::Config,
+            container::{
+                docker::{CapturingDockerExecutor, DockerCall},
+                github::GitHubClient,
+            },
             features,
         };
-        let config = Config {
-            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            log_level: "info".to_string(),
-            renovate_username: "renovate[bot]".to_string(),
-            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
-            github_token: None,
-            allow_latest_images: false,
-            api_token: None,
-            mode: Mode::Webhook { secret: "test".to_string() },
-            service_filter: None,
-            repo_path_prefix: None,
-            initial_sync: true,
-            shepherd_service_name: None,
-            #[cfg(feature = "otlp")]
-            otlp_endpoint: "http://localhost:4317".to_string(),
-        };
+        let executor = CapturingDockerExecutor::new();
+        let calls = executor.calls.clone();
+        let config = std::sync::Arc::new(Config::for_test(None));
+        let github_client = std::sync::Arc::new(GitHubClient::new(None));
         let orch = DeploymentOrchestrator::with_executor(
-            &config,
+            config,
+            github_client,
             features::new_flags(),
             executor,
         )

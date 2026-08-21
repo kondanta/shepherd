@@ -65,7 +65,7 @@ async fn serve(
 
     let flags = features::new_flags();
 
-    let orchestrator = DeploymentOrchestrator::new(&config, flags.clone())
+    let orchestrator = DeploymentOrchestrator::new(Arc::clone(&config), flags.clone())
         .await
         .unwrap_or_else(|e| {
             eprintln!("Failed to initialize orchestrator: {e}");
@@ -78,8 +78,9 @@ async fn serve(
         config::Mode::Poll { repo, interval_secs, .. } => {
             let p = poller::Poller::new(
                 Arc::clone(&state.orchestrator),
+                state.orchestrator.github_client(),
                 state.flags.clone(),
-                &state.config,
+                Arc::clone(&state.config),
             );
             tracing::info!(repo = %repo, interval_secs, "Polling mode active");
             tokio::spawn(async move { p.run().await });

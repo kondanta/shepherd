@@ -1,9 +1,11 @@
+use crate::config::Config;
 use crate::container::{
     DeploymentOrchestrator,
     docker::{DockerClient, DockerExecutor},
     github::GitHubClient,
 };
 use crate::features::SharedFlags;
+use crate::fs::walk::is_compose_file;
 use color_eyre::Result;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,16 +13,12 @@ use tokio::sync::Mutex;
 
 pub struct Poller<D: DockerExecutor = DockerClient> {
     orchestrator: Arc<DeploymentOrchestrator<D>>,
-    // TODO: consolidate with DeploymentOrchestrator's github_client once the
-    // Poller and Orchestrator are unified or the client is made cheaply clonable.
-    github: GitHubClient,
+    github: Arc<GitHubClient>,
+    config: Arc<Config>,
     owner: String,
     repo: String,
     branch: String,
     interval: Duration,
-    renovate_username: String,
-    renovate_email: String,
-    repo_path_prefix: Option<String>,
     flags: SharedFlags,
     last_sha: Mutex<Option<String>>,
 }
@@ -28,8 +26,9 @@ pub struct Poller<D: DockerExecutor = DockerClient> {
 impl<D: DockerExecutor> Poller<D> {
     pub fn new(
         orchestrator: Arc<DeploymentOrchestrator<D>>,
+        github_client: Arc<GitHubClient>,
         flags: SharedFlags,
-        config: &crate::config::Config,
+        config: Arc<Config>,
     ) -> Self {
         let (owner, repo, branch, interval) = match &config.mode {
             crate::config::Mode::Poll { repo, interval_secs, branch } => {
@@ -48,14 +47,12 @@ impl<D: DockerExecutor> Poller<D> {
             }
         };
         Self {
-            github: GitHubClient::new(config.github_token.clone()),
+            github: github_client,
             owner,
             repo,
             branch,
             interval,
-            renovate_username: config.renovate_username.clone(),
-            renovate_email: config.renovate_email.clone(),
-            repo_path_prefix: config.repo_path_prefix.clone(),
+            config,
             flags,
             orchestrator,
             last_sha: Mutex::new(None),
@@ -159,7 +156,7 @@ impl<D: DockerExecutor> Poller<D> {
         let files =
             self.github.list_repo_files(&self.owner, &self.repo, sha).await?;
 
-        let prefix = self.repo_path_prefix.as_deref().unwrap_or("");
+        let prefix = self.config.repo_path_prefix.as_deref().unwrap_or("");
         let compose_files: Vec<String> = files
             .into_iter()
             .filter(|f| {
@@ -183,49 +180,9 @@ impl<D: DockerExecutor> Poller<D> {
             commit.author_login.as_deref(),
             &commit.author_name,
             &commit.author_email,
-            &self.renovate_username,
-            &self.renovate_email,
+            &self.config.renovate_username,
+            &self.config.renovate_email,
         )
     }
 }
 
-/// Returns true if `path` ends with a canonical compose file name.
-///
-/// Matches only the filename component, not a suffix of a longer name, so
-/// `not-compose.yaml` is not accepted.
-fn is_compose_file(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    matches!(name, "compose.yaml" | "docker-compose.yaml")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compose_yaml_accepted() {
-        assert!(is_compose_file("compose.yaml"));
-        assert!(is_compose_file("apps/myapp/compose.yaml"));
-    }
-
-    #[test]
-    fn docker_compose_yaml_accepted() {
-        assert!(is_compose_file("docker-compose.yaml"));
-        assert!(is_compose_file("infra/svc/docker-compose.yaml"));
-    }
-
-    #[test]
-    fn arbitrary_yaml_rejected() {
-        assert!(!is_compose_file("renovate.yaml"));
-        assert!(!is_compose_file(".renovaterc.yaml"));
-        assert!(!is_compose_file("ci.yml"));
-        assert!(!is_compose_file("not-compose.yaml"));
-    }
-
-    #[test]
-    fn yml_variants_rejected() {
-        // We intentionally do not support .yml — compose files use .yaml.
-        assert!(!is_compose_file("compose.yml"));
-        assert!(!is_compose_file("docker-compose.yml"));
-    }
-}
