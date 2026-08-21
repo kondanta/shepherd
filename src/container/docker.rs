@@ -6,13 +6,22 @@ use tokio::{process::Command as TokioCommand, time::timeout};
 // Per-operation ceiling: kills the docker child on expiry via kill_on_drop(true).
 const DOCKER_COMMAND_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Provides an interface for Docker container lifecycle operations.
+///
+/// Implementations allow pulling images and managing Docker Compose services,
+/// enabling unit testing via mocks or fake implementations.
 pub trait DockerExecutor: Clone + Send + Sync + 'static {
+    /// Pulls a target container image from a registry
     fn pull_image(&self, image: &str) -> impl Future<Output = Result<()>> + Send;
+
+    /// Forces a restart and recreation of a specific Compose service
     fn restart_compose_service(
         &self,
         compose_file: &Path,
         service_name: &str,
     ) -> impl Future<Output = Result<()>> + Send;
+
+    /// Starts or updates a single service defined in a Compose file without recreating dependencies
     fn compose_up_service(
         &self,
         compose_file: &Path,
@@ -22,22 +31,30 @@ pub trait DockerExecutor: Clone + Send + Sync + 'static {
 
 #[derive(Clone)]
 pub struct DockerClient {
+    /// System path to the local `docker` executable
     docker_bin: String,
 }
 
 impl DockerClient {
+    /// Creates a new DockerClient
+    ///
+    /// Returns an error if the docker binary cannot be located on 'PATH'
+    /// or if docker compose (v2) is unavailable.
     pub async fn new() -> Result<Self> {
         let docker_bin = Self::find_executable("docker")?;
         Self::verify_compose_available().await?;
         Ok(Self { docker_bin })
     }
 
+    /// Resolves the absolute system path for a given binary name using the environment 'PATH'
     fn find_executable(name: &str) -> Result<String> {
         which::which(name)
             .wrap_err_with(|| format!("Failed to find executable: {}", name))
             .map(|p| p.to_string_lossy().to_string())
     }
 
+    /// Verifies that the docker compose V2 is installed
+    /// V2 means `docker compose`.
     pub(crate) async fn verify_compose_available() -> Result<()> {
         let ok = TokioCommand::new("docker")
             .args(["compose", "version"])
