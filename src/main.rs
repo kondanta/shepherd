@@ -65,12 +65,13 @@ async fn serve(
 
     let flags = features::new_flags();
 
-    let orchestrator = DeploymentOrchestrator::new(Arc::clone(&config), flags.clone())
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("Failed to initialize orchestrator: {e}");
-            std::process::exit(1);
-        });
+    let orchestrator =
+        DeploymentOrchestrator::new(Arc::clone(&config), flags.clone())
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to initialize orchestrator: {e}");
+                std::process::exit(1);
+            });
 
     let state = AppState { config, orchestrator: Arc::new(orchestrator), flags };
 

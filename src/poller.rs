@@ -185,4 +185,3 @@ impl<D: DockerExecutor> Poller<D> {
         )
     }
 }
-

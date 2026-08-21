@@ -75,7 +75,8 @@ pub struct DeploymentOrchestrator<D: DockerExecutor = DockerClient> {
 impl DeploymentOrchestrator<DockerClient> {
     pub async fn new(config: Arc<Config>, flags: SharedFlags) -> Result<Self> {
         let github_client = Arc::new(GitHubClient::new(config.github_token.clone()));
-        Self::with_executor(config, github_client, flags, DockerClient::new().await?).await
+        Self::with_executor(config, github_client, flags, DockerClient::new().await?)
+            .await
     }
 }
 
@@ -144,7 +145,11 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
         let service = match image {
             Some(img) => {
                 let image_ref = ImageReference::parse(&img)?;
-                check_tag_policy(&service.name, &image_ref, self.config.allow_latest_images)?;
+                check_tag_policy(
+                    &service.name,
+                    &image_ref,
+                    self.config.allow_latest_images,
+                )?;
                 let (path, name, img_for_write) =
                     (service.path.clone(), service.name.clone(), img.clone());
                 tokio::task::spawn_blocking(move || {
@@ -166,7 +171,11 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
             }
             None => {
                 let image_ref = ImageReference::parse(&service.image)?;
-                check_tag_policy(&service.name, &image_ref, self.config.allow_latest_images)?;
+                check_tag_policy(
+                    &service.name,
+                    &image_ref,
+                    self.config.allow_latest_images,
+                )?;
                 service
             }
         };
@@ -203,9 +212,11 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
                     continue;
                 }
             };
-            if let Err(e) =
-                check_tag_policy(&service.name, &image_ref, self.config.allow_latest_images)
-            {
+            if let Err(e) = check_tag_policy(
+                &service.name,
+                &image_ref,
+                self.config.allow_latest_images,
+            ) {
                 tracing::warn!("{e}");
                 continue;
             }
@@ -245,7 +256,10 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
             return Ok(());
         }
         let modified: Vec<String> = payload
-            .modified_compose_files(&self.config.renovate_username, &self.config.renovate_email)
+            .modified_compose_files(
+                &self.config.renovate_username,
+                &self.config.renovate_email,
+            )
             .into_iter()
             .collect();
         if modified.is_empty() {
@@ -305,8 +319,9 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
                 .await
             {
                 Ok((old, new)) => to_restart.extend(
-                    diff_services(&old, new, self.config.allow_latest_images).into_iter().filter(
-                        |s| {
+                    diff_services(&old, new, self.config.allow_latest_images)
+                        .into_iter()
+                        .filter(|s| {
                             if self.is_service_allowed(&s.name) {
                                 true
                             } else {
@@ -316,8 +331,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
                                 );
                                 false
                             }
-                        },
-                    ),
+                        }),
                 ),
                 Err(e) => tracing::warn!("Failed to sync {github_path}: {e:?}"),
             }

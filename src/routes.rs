@@ -64,10 +64,14 @@ pub fn router<D: DockerExecutor>(state: AppState<D>) -> axum::Router {
             let secret = secret.clone();
             axum::Router::new().route(
                 "/webhook/github",
-                post(move |State(st): State<AppState<D>>, hdrs: HeaderMap, body: Bytes| {
-                    let s = secret.clone();
-                    async move { github_webhook(st, hdrs, body, s).await }
-                })
+                post(
+                    move |State(st): State<AppState<D>>,
+                          hdrs: HeaderMap,
+                          body: Bytes| {
+                        let s = secret.clone();
+                        async move { github_webhook(st, hdrs, body, s).await }
+                    },
+                )
                 .layer(DefaultBodyLimit::max(1024 * 1024)),
             )
         }
