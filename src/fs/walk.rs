@@ -29,7 +29,7 @@ pub fn scan_filesystem(root: &Path) -> Result<Vec<ServiceEntry>> {
 
         tracing::debug!("Visiting path: {:?}", path);
 
-        if path.extension().map(|e| e == "yaml").unwrap_or(false) {
+        if path.to_str().map(is_compose_file).unwrap_or(false) {
             tracing::debug!("Parsing YAML file: {:?}", path);
             match parse_yaml_file(path) {
                 Ok(entries) => results.extend(entries),
@@ -123,8 +123,8 @@ fn replace_image_in_place(
                 replaced = true;
                 continue;
             }
-        // Matches `service_name` only. Quoted keys are not handled.
         } else if stripped == format!("{}:", service_name) {
+            // Matches `service_name` only. Quoted keys are not handled.
             in_service = true;
             service_indent = indent;
         }
@@ -143,6 +143,15 @@ fn replace_image_in_place(
     }
 
     Some(out)
+}
+
+/// Returns true if `path` ends with a canonical compose file name.
+///
+/// Matches only the filename component, not a suffix of a longer name, so
+/// `not-compose.yaml` is not accepted.
+pub(crate) fn is_compose_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    matches!(name, "compose.yaml" | "docker-compose.yaml")
 }
 
 pub(crate) fn parse_yaml_file(path: &Path) -> Result<Vec<ServiceEntry>> {
@@ -188,6 +197,32 @@ pub(crate) fn parse_yaml_str(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compose_yaml_accepted() {
+        assert!(is_compose_file("compose.yaml"));
+        assert!(is_compose_file("apps/myapp/compose.yaml"));
+    }
+
+    #[test]
+    fn docker_compose_yaml_accepted() {
+        assert!(is_compose_file("docker-compose.yaml"));
+        assert!(is_compose_file("infra/svc/docker-compose.yaml"));
+    }
+
+    #[test]
+    fn arbitrary_yaml_rejected() {
+        assert!(!is_compose_file("renovate.yaml"));
+        assert!(!is_compose_file(".renovaterc.yaml"));
+        assert!(!is_compose_file("ci.yml"));
+        assert!(!is_compose_file("not-compose.yaml"));
+    }
+
+    #[test]
+    fn yml_variants_rejected() {
+        assert!(!is_compose_file("compose.yml"));
+        assert!(!is_compose_file("docker-compose.yml"));
+    }
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;

@@ -121,7 +121,7 @@ impl WebhookPayload {
                 )
             })
             .flat_map(|c| c.modified.iter().chain(c.added.iter()))
-            .filter(|f| f.ends_with(".yaml"))
+            .filter(|f| crate::fs::walk::is_compose_file(f))
             .cloned()
             .collect()
     }

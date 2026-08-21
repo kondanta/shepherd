@@ -47,6 +47,28 @@ pub struct Config {
     pub repo_path_prefix: Option<String>,
 }
 
+#[cfg(test)]
+impl Config {
+    pub(crate) fn for_test(api_token: Option<&str>) -> Self {
+        Config {
+            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            log_level: "info".to_string(),
+            renovate_username: "renovate[bot]".to_string(),
+            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
+            github_token: None,
+            allow_latest_images: false,
+            api_token: api_token.map(String::from),
+            mode: Mode::Webhook { secret: "test".to_string() },
+            service_filter: None,
+            repo_path_prefix: None,
+            initial_sync: true,
+            shepherd_service_name: None,
+            #[cfg(feature = "otlp")]
+            otlp_endpoint: "http://localhost:4317".to_string(),
+        }
+    }
+}
+
 impl Config {
     pub fn load() -> Result<Self, String> {
         // Load .env if it exists; ignore errors

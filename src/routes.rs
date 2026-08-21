@@ -59,11 +59,22 @@ pub fn router<D: DockerExecutor>(state: AppState<D>) -> axum::Router {
     #[cfg(feature = "metrics")]
     let (prometheus_layer, metric_handle) = PrometheusMetricLayer::pair();
 
-    let webhook_router = match state.config.mode {
-        crate::config::Mode::Webhook { .. } => axum::Router::new().route(
-            "/webhook/github",
-            post(github_webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
-        ),
+    let webhook_router = match &state.config.mode {
+        crate::config::Mode::Webhook { secret } => {
+            let secret = secret.clone();
+            axum::Router::new().route(
+                "/webhook/github",
+                post(
+                    move |State(st): State<AppState<D>>,
+                          hdrs: HeaderMap,
+                          body: Bytes| {
+                        let s = secret.clone();
+                        async move { github_webhook(st, hdrs, body, s).await }
+                    },
+                )
+                .layer(DefaultBodyLimit::max(1024 * 1024)),
+            )
+        }
         crate::config::Mode::Poll { .. } => axum::Router::new(),
     };
 
@@ -262,10 +273,11 @@ pub async fn list_managed_services<D: DockerExecutor>(
     Ok(Json(ManagedServicesResponse { services, total }))
 }
 
-pub async fn github_webhook<D: DockerExecutor>(
-    State(state): State<AppState<D>>,
+async fn github_webhook<D: DockerExecutor>(
+    state: AppState<D>,
     headers: HeaderMap,
     body: Bytes,
+    secret: String,
 ) -> StatusCode {
     let signature =
         match headers.get("X-Hub-Signature-256").and_then(|v| v.to_str().ok()) {
@@ -277,15 +289,7 @@ pub async fn github_webhook<D: DockerExecutor>(
             }
         };
 
-    let secret = match &state.config.mode {
-        crate::config::Mode::Webhook { secret } => secret.as_str(),
-        crate::config::Mode::Poll { .. } => {
-            tracing::error!("Webhook handler reached in polling mode");
-            return StatusCode::INTERNAL_SERVER_ERROR;
-        }
-    };
-
-    if !verify_github_signature(secret, &body, &signature) {
+    if !verify_github_signature(&secret, &body, &signature) {
         tracing::warn!("Invalid webhook signature");
         crate::metrics::webhook_received("signature_invalid");
         return StatusCode::UNAUTHORIZED;
@@ -532,34 +536,21 @@ mod tests {
         api_token: Option<&str>,
     ) -> AppState<crate::container::docker::CapturingDockerExecutor> {
         use crate::{
-            config::{Config, Mode},
-            container::docker::CapturingDockerExecutor,
+            config::Config,
+            container::{docker::CapturingDockerExecutor, github::GitHubClient},
             features,
         };
-        let config = Arc::new(Config {
-            root_dir: std::env::temp_dir().to_string_lossy().into_owned(),
-            log_level: "info".to_string(),
-            renovate_username: "renovate[bot]".to_string(),
-            renovate_email: "renovate[bot]@users.noreply.github.com".to_string(),
-            github_token: None,
-            allow_latest_images: false,
-            api_token: api_token.map(String::from),
-            mode: Mode::Webhook { secret: "test".to_string() },
-            service_filter: None,
-            repo_path_prefix: None,
-            initial_sync: true,
-            shepherd_service_name: None,
-            #[cfg(feature = "otlp")]
-            otlp_endpoint: "http://localhost:4317".to_string(),
-        });
+        let config = Arc::new(Config::for_test(api_token));
+        let github_client = Arc::new(GitHubClient::new(None));
         let flags = features::new_flags();
         let orchestrator = crate::container::DeploymentOrchestrator::with_executor(
-            &config,
+            Arc::clone(&config),
+            github_client,
             flags.clone(),
             CapturingDockerExecutor::new(),
         )
         .await
-        .expect("DeploymentOrchestrator::new failed — is docker installed?");
+        .expect("DeploymentOrchestrator::with_executor failed");
         AppState { config, orchestrator: Arc::new(orchestrator), flags }
     }
 
