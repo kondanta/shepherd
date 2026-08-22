@@ -214,13 +214,12 @@ pub(crate) async fn health_check<D: DockerExecutor>(
 pub(crate) async fn readiness_check<D: DockerExecutor>(
     State(state): State<AppState<D>>,
 ) -> (StatusCode, Json<ReadyResponse>) {
-    let (root_dir_result, docker_result) = tokio::join!(
+    let (root_dir_result, docker_ok) = tokio::join!(
         tokio::fs::metadata(&state.config.root_dir),
-        tokio::process::Command::new("docker").args(["compose", "version"]).output(),
+        state.orchestrator.check_available(),
     );
 
     let root_dir_ok = root_dir_result.map(|m| m.is_dir()).unwrap_or(false);
-    let docker_ok = docker_result.map(|o| o.status.success()).unwrap_or(false);
     let all_ok = root_dir_ok && docker_ok;
 
     if !all_ok {

@@ -101,6 +101,10 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
         Arc::clone(&self.github_client)
     }
 
+    pub async fn check_available(&self) -> bool {
+        self.docker_client.check_available().await
+    }
+
     // ── public API ────────────────────────────────────────────────────────────
 
     pub async fn get_managed_services(&self) -> Result<Vec<ServiceEntry>> {
@@ -674,6 +678,10 @@ mod tests {
             _service_name: &str,
         ) -> Result<()> {
             Err(eyre::eyre!("compose up failed"))
+        }
+
+        async fn check_available(&self) -> bool {
+            false
         }
     }
 
