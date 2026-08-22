@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::container::github::GitHubProvider;
 use crate::container::{
     DeploymentOrchestrator,
     docker::{DockerClient, DockerExecutor},
@@ -11,9 +12,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub struct Poller<D: DockerExecutor = DockerClient> {
-    orchestrator: Arc<DeploymentOrchestrator<D>>,
-    github: Arc<GitHubClient>,
+pub struct Poller<D: DockerExecutor = DockerClient, G: GitHubProvider = GitHubClient>
+{
+    orchestrator: Arc<DeploymentOrchestrator<D, G>>,
+    github: Arc<G>,
     config: Arc<Config>,
     owner: String,
     repo: String,
@@ -23,10 +25,10 @@ pub struct Poller<D: DockerExecutor = DockerClient> {
     last_sha: Mutex<Option<String>>,
 }
 
-impl<D: DockerExecutor> Poller<D> {
+impl<D: DockerExecutor, G: GitHubProvider> Poller<D, G> {
     pub fn new(
-        orchestrator: Arc<DeploymentOrchestrator<D>>,
-        github_client: Arc<GitHubClient>,
+        orchestrator: Arc<DeploymentOrchestrator<D, G>>,
+        github_client: Arc<G>,
         flags: SharedFlags,
         config: Arc<Config>,
     ) -> Self {
@@ -183,5 +185,143 @@ impl<D: DockerExecutor> Poller<D> {
             &self.config.renovate_username,
             &self.config.renovate_email,
         )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::{
+        config::{self, Config},
+        container::{
+            docker::CapturingDockerExecutor,
+            github::{FakeGitHubClient, PollCommit},
+        },
+        features,
+    };
+    use std::sync::{Arc, Mutex};
+
+    fn poll_config() -> Config {
+        Config {
+            mode: config::Mode::Poll {
+                repo: "owner/repo".to_string(),
+                interval_secs: 60,
+                branch: "main".to_string(),
+            },
+            ..Config::for_test(None)
+        }
+    }
+
+    async fn fake_poller() -> (
+        Poller<CapturingDockerExecutor, FakeGitHubClient>,
+        Arc<FakeGitHubClient>,
+        Arc<Mutex<Vec<crate::container::docker::DockerCall>>>,
+        TempDir,
+    ) {
+        let github = Arc::new(FakeGitHubClient::default());
+        let executor = CapturingDockerExecutor::default();
+        let calls = executor.calls.clone();
+        let tmp = TempDir::new().unwrap();
+        let config = Arc::new(Config {
+            root_dir: tmp.path().to_string_lossy().into_owned(),
+            ..poll_config()
+        });
+        let orchestrator = Arc::new(
+            DeploymentOrchestrator::with_executor(
+                Arc::clone(&config),
+                Arc::clone(&github),
+                features::new_flags(),
+                executor,
+            )
+            .await
+            .unwrap(),
+        );
+
+        let poller = Poller::new(
+            Arc::clone(&orchestrator),
+            Arc::clone(&github),
+            features::new_flags(),
+            Arc::clone(&config),
+        );
+
+        (poller, github, calls, tmp)
+    }
+
+    #[tokio::test]
+    async fn poll_once_no_commit_is_noop() {
+        let (poller, github, _calls, _tmp) = fake_poller().await;
+
+        // First poll: establishes last_sha via sync_from_head
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
+        poller.poll_once().await.unwrap();
+
+        // Second poll: no new commits — exercises the actual noop path
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
+        poller.poll_once().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn poll_once_non_renovate_commit_is_ignored() {
+        let (poller, github, _calls, _tmp) = fake_poller().await;
+
+        // Establish last_sha first so the next poll takes the commit processing path
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
+        poller.poll_once().await.unwrap();
+
+        github.commits_queue.lock().unwrap().push_back((
+            "b".repeat(40),
+            vec![PollCommit {
+                sha: "c".repeat(40),
+                author_email: "some@example.com".to_string(),
+                author_name: "some person".to_string(),
+                author_login: None,
+            }],
+        ));
+
+        poller.poll_once().await.unwrap();
+
+        assert!(
+            github.get_commit_files_calls.lock().unwrap().is_empty(),
+            "get_commit_files should not be called for non-Renovate commits"
+        );
+    }
+
+    #[tokio::test]
+    async fn poll_once_renovate_commit_triggers_deploy() {
+        let (poller, github, calls, _tmp) = fake_poller().await;
+        let commit_sha = "d".repeat(40);
+        let yaml_content = "services:\n  nginx:\n    # web server\n    image: nginx:1.24\n    ports:\n      - '80:80'\n";
+
+        // We need to init last_sha via sync_from_head
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
+        poller.poll_once().await.unwrap();
+
+        // Second poll: we have previous sha, this is what triggers the commit processing path
+        github.commits_queue.lock().unwrap().push_back((
+            "e".repeat(40),
+            vec![PollCommit {
+                sha: commit_sha.clone(),
+                author_name: "renovate[bot]".to_string(),
+                author_email: "renovate[bot]@users.noreply.github.com".to_string(),
+                author_login: Some("renovate[bot]".to_string()),
+            }],
+        ));
+        github
+            .commit_files
+            .lock()
+            .unwrap()
+            .insert(commit_sha.clone(), vec!["docker-compose.yaml".to_string()]);
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("docker-compose.yaml".to_string(), yaml_content.to_string());
+
+        poller.poll_once().await.unwrap();
+
+        let recorded_calls = calls.lock().unwrap();
+        assert!(!recorded_calls.is_empty(), "expected a Docker deploy call");
     }
 }

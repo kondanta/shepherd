@@ -4,7 +4,7 @@ pub mod image;
 pub mod webhook;
 
 use docker::{DockerClient, DockerExecutor};
-use github::GitHubClient;
+use github::{GitHubClient, GitHubProvider};
 use image::ImageReference;
 
 use crate::config::Config;
@@ -59,9 +59,12 @@ pub struct Deployment {
 ///
 /// Concurrent webhook deliveries are serialized by an internal semaphore —
 /// the HTTP response is immediate, but the actual deploy work is queued.
-pub struct DeploymentOrchestrator<D: DockerExecutor = DockerClient> {
+pub struct DeploymentOrchestrator<
+    D: DockerExecutor = DockerClient,
+    G: GitHubProvider = GitHubClient,
+> {
     docker_client: D,
-    github_client: Arc<GitHubClient>,
+    github_client: Arc<G>,
     config: Arc<Config>,
     flags: SharedFlags,
     /// Deployment history, capped at 200 entries. Uses a std Mutex because
@@ -80,10 +83,10 @@ impl DeploymentOrchestrator<DockerClient> {
     }
 }
 
-impl<D: DockerExecutor> DeploymentOrchestrator<D> {
+impl<D: DockerExecutor, G: GitHubProvider> DeploymentOrchestrator<D, G> {
     pub async fn with_executor(
         config: Arc<Config>,
-        github_client: Arc<GitHubClient>,
+        github_client: Arc<G>,
         flags: SharedFlags,
         docker: D,
     ) -> Result<Self> {
@@ -97,7 +100,7 @@ impl<D: DockerExecutor> DeploymentOrchestrator<D> {
         })
     }
 
-    pub fn github_client(&self) -> Arc<GitHubClient> {
+    pub fn github_client(&self) -> Arc<G> {
         Arc::clone(&self.github_client)
     }
 
@@ -653,7 +656,10 @@ fn duration_secs(d: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{container::docker::DockerExecutor, fs::walk::ServiceEntry};
+    use crate::{
+        container::{docker::DockerExecutor, github::FakeGitHubClient},
+        fs::walk::ServiceEntry,
+    };
     use std::path::PathBuf;
 
     #[derive(Clone, Default)]
@@ -685,16 +691,17 @@ mod tests {
         }
     }
 
-    async fn fake_orchestrator()
-    -> DeploymentOrchestrator<crate::container::docker::CapturingDockerExecutor>
-    {
+    async fn fake_orchestrator() -> DeploymentOrchestrator<
+        crate::container::docker::CapturingDockerExecutor,
+        FakeGitHubClient,
+    > {
         use crate::{
             config::Config,
-            container::{docker::CapturingDockerExecutor, github::GitHubClient},
+            container::{docker::CapturingDockerExecutor, github::FakeGitHubClient},
             features,
         };
         let config = std::sync::Arc::new(Config::for_test(None));
-        let github_client = std::sync::Arc::new(GitHubClient::new(None));
+        let github_client = std::sync::Arc::new(FakeGitHubClient::default());
         DeploymentOrchestrator::with_executor(
             config,
             github_client,
