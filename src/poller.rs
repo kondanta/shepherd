@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::container::github::GitHubProvider;
+use crate::container::github::ForgeProvider;
 use crate::container::{
     DeploymentOrchestrator,
     docker::{DockerClient, DockerExecutor},
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub struct Poller<D: DockerExecutor = DockerClient, G: GitHubProvider = GitHubClient>
+pub struct Poller<D: DockerExecutor = DockerClient, G: ForgeProvider = GitHubClient>
 {
     orchestrator: Arc<DeploymentOrchestrator<D, G>>,
     github: Arc<G>,
@@ -25,7 +25,7 @@ pub struct Poller<D: DockerExecutor = DockerClient, G: GitHubProvider = GitHubCl
     last_sha: Mutex<Option<String>>,
 }
 
-impl<D: DockerExecutor, G: GitHubProvider> Poller<D, G> {
+impl<D: DockerExecutor, G: ForgeProvider> Poller<D, G> {
     pub fn new(
         orchestrator: Arc<DeploymentOrchestrator<D, G>>,
         github_client: Arc<G>,

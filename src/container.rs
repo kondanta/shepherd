@@ -4,7 +4,7 @@ pub mod image;
 pub mod webhook;
 
 use docker::{DockerClient, DockerExecutor};
-use github::{GitHubClient, GitHubProvider};
+use github::{ForgeProvider, GitHubClient};
 use image::ImageReference;
 
 use crate::config::Config;
@@ -61,7 +61,7 @@ pub struct Deployment {
 /// the HTTP response is immediate, but the actual deploy work is queued.
 pub struct DeploymentOrchestrator<
     D: DockerExecutor = DockerClient,
-    G: GitHubProvider = GitHubClient,
+    G: ForgeProvider = GitHubClient,
 > {
     docker_client: D,
     github_client: Arc<G>,
@@ -75,7 +75,7 @@ pub struct DeploymentOrchestrator<
     deploy_semaphore: tokio::sync::Semaphore,
 }
 
-impl<D: DockerExecutor, G: GitHubProvider> DeploymentOrchestrator<D, G> {
+impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
     pub async fn with_executor(
         config: Arc<Config>,
         github_client: Arc<G>,

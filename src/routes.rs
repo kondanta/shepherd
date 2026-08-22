@@ -19,7 +19,7 @@ use crate::container::{
 };
 use crate::{
     config::Config,
-    container::github::{GitHubClient, GitHubProvider},
+    container::github::{ForgeProvider, GitHubClient},
 };
 
 use crate::features::SharedFlags;
@@ -33,20 +33,20 @@ use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer}
 #[derive(Clone)]
 pub struct AppState<
     D: DockerExecutor = DockerClient,
-    G: GitHubProvider = GitHubClient,
+    G: ForgeProvider = GitHubClient,
 > {
     pub config: Arc<Config>,
     pub orchestrator: Arc<DeploymentOrchestrator<D, G>>,
     pub flags: SharedFlags,
 }
 
-impl<D: DockerExecutor, G: GitHubProvider> FromRef<AppState<D, G>> for SharedFlags {
+impl<D: DockerExecutor, G: ForgeProvider> FromRef<AppState<D, G>> for SharedFlags {
     fn from_ref(input: &AppState<D, G>) -> Self {
         Arc::clone(&input.flags)
     }
 }
 
-impl<D: DockerExecutor, G: GitHubProvider> FromRef<AppState<D, G>> for Arc<Config> {
+impl<D: DockerExecutor, G: ForgeProvider> FromRef<AppState<D, G>> for Arc<Config> {
     fn from_ref(input: &AppState<D, G>) -> Self {
         Arc::clone(&input.config)
     }
@@ -54,7 +54,7 @@ impl<D: DockerExecutor, G: GitHubProvider> FromRef<AppState<D, G>> for Arc<Confi
 
 /// Build the complete router. This is the single place that owns all route
 /// definitions and their middleware — `main` just binds and serves.
-pub fn router<D: DockerExecutor, G: GitHubProvider>(
+pub fn router<D: DockerExecutor, G: ForgeProvider>(
     state: AppState<D, G>,
 ) -> axum::Router {
     if state.config.api_token.is_none() {
@@ -231,7 +231,7 @@ pub(crate) async fn health_check(
 /// Answers "should k8s send traffic to this pod?". Runs both checks
 /// independently so the response always shows per-check detail regardless
 /// of which one fails.
-pub(crate) async fn readiness_check<D: DockerExecutor, G: GitHubProvider>(
+pub(crate) async fn readiness_check<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> (StatusCode, Json<ReadyResponse>) {
     let (root_dir_result, docker_ok) = tokio::join!(
@@ -281,7 +281,7 @@ pub struct ManagedServicesResponse {
     pub total: usize,
 }
 
-pub async fn list_managed_services<D: DockerExecutor, G: GitHubProvider>(
+pub async fn list_managed_services<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> Result<Json<ManagedServicesResponse>, StatusCode> {
     let services = state.orchestrator.get_managed_services().await.map_err(|e| {
@@ -292,7 +292,7 @@ pub async fn list_managed_services<D: DockerExecutor, G: GitHubProvider>(
     Ok(Json(ManagedServicesResponse { services, total }))
 }
 
-async fn github_webhook<D: DockerExecutor, G: GitHubProvider>(
+async fn github_webhook<D: DockerExecutor, G: ForgeProvider>(
     state: AppState<D, G>,
     headers: HeaderMap,
     body: Bytes,
@@ -358,7 +358,7 @@ async fn github_webhook<D: DockerExecutor, G: GitHubProvider>(
     StatusCode::ACCEPTED
 }
 
-pub async fn list_deployments<D: DockerExecutor, G: GitHubProvider>(
+pub async fn list_deployments<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> Json<Vec<Deployment>> {
     Json(state.orchestrator.list_deployments())
@@ -373,7 +373,7 @@ pub struct ManualDeployRequest {
     pub image: Option<String>,
 }
 
-pub async fn manual_deploy<D: DockerExecutor, G: GitHubProvider>(
+pub async fn manual_deploy<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
     Json(req): Json<ManualDeployRequest>,
 ) -> StatusCode {
@@ -407,7 +407,7 @@ pub async fn manual_deploy<D: DockerExecutor, G: GitHubProvider>(
     StatusCode::ACCEPTED
 }
 
-pub async fn trigger_sync<D: DockerExecutor, G: GitHubProvider>(
+pub async fn trigger_sync<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> StatusCode {
     if state.flags.load().deployments_paused {
