@@ -533,10 +533,6 @@ mod tests {
     // ── require_api_token ─────────────────────────────────────────────────────
 
     /// Build a minimal AppState for middleware tests.
-    ///
-    /// Requires docker to be installed (DeploymentOrchestrator::new calls
-    /// `docker compose version` on startup). Tests are not marked #[ignore]
-    /// because docker is available in this project's CI environment.
     async fn test_state(
         api_token: Option<&str>,
     ) -> AppState<crate::container::docker::CapturingDockerExecutor> {
