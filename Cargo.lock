@@ -2085,7 +2085,7 @@ dependencies = [
 
 [[package]]
 name = "shepherd"
-version = "2026.7.2"
+version = "2026.8.1"
 dependencies = [
  "arc-swap",
  "axum",

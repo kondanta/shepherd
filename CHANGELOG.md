@@ -1,5 +1,63 @@
 # Changelog
 
+## [2026.8.1] - 2026-08-22
+
+### Bug Fixes
+
+- **router:** deduplicate docker check (#142)([`13504b4`](https://github.com/kondanta/shepherd/commit/13504b45f4063e9308f903857ff880be4ba122fc))
+
+- remove .yml check as shepherd solely supports .yaml extension (#140)([`1c2a18e`](https://github.com/kondanta/shepherd/commit/1c2a18e1b19bfc1795e5fd147a5713c06f505fbb))
+
+
+### Code Refactoring
+
+- remove redundant clone (#144)([`682f694`](https://github.com/kondanta/shepherd/commit/682f69481477fd48334f325fbe8585cf634af7a3))
+
+- unify compose filter, share Arc<Config>, clean up webhook handler (#141)([`6b29bfc`](https://github.com/kondanta/shepherd/commit/6b29bfc8d57932d46acd203477c9e85fdbcae00d))
+
+
+### Features
+
+- introduce GitHubProvider trait (#143)([`50b8aee`](https://github.com/kondanta/shepherd/commit/50b8aee8591565123e13501ebafeb5e16cc1492f))
+
+- introduce DockerExecutor trait (#139)([`4d76d16`](https://github.com/kondanta/shepherd/commit/4d76d1606f29cf0012aee22ead5c4c6db16d0bf5))
+
+
+### Miscellaneous Chores
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to 917b051 (#138)([`5ecf75d`](https://github.com/kondanta/shepherd/commit/5ecf75d7cc1ed5c428d18c510db3e8bcb580a86e))
+
+- **deps:** lock file maintenance (#137)([`38b888a`](https://github.com/kondanta/shepherd/commit/38b888a4b1ba9c1a9c3228b4b2303cbba932c131))
+
+- **deps:** update dependencies (#136)([`acb439a`](https://github.com/kondanta/shepherd/commit/acb439a23bc65fbe7b351e8f62841a3d9d4a139a))
+
+- **deps:** update docker/dockerfile:1 docker digest to ecfaec9 (#135)([`3239295`](https://github.com/kondanta/shepherd/commit/323929531862ef9c675a4f1525db69afb2e43a7f))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to 980619e (#134)([`96def9b`](https://github.com/kondanta/shepherd/commit/96def9bb024559258ef81f8d299303b7154b31ae))
+
+- **deps:** update rust crate eyre to v0.6.14 (#133)([`7caac2a`](https://github.com/kondanta/shepherd/commit/7caac2a9a964bd68052de7ddd9d0f2eb9cc0342f))
+
+- **deps:** update docker:cli docker digest to 000bb62 (#132)([`4319982`](https://github.com/kondanta/shepherd/commit/4319982aac4b0bb7c2fd2321ab442f2ac174f4e8))
+
+- **deps:** lock file maintenance (#131)([`03f9413`](https://github.com/kondanta/shepherd/commit/03f9413762ea248d3c4d609669cb75fa447d5f04))
+
+- **deps:** update rust crate clap to v4.6.6 (#130)([`675244e`](https://github.com/kondanta/shepherd/commit/675244ec9e338d94a6f954f8e5f6b12faaa23fd1))
+
+- **deps:** update docker:cli docker digest to 27a51d5 (#129)([`301265f`](https://github.com/kondanta/shepherd/commit/301265ffa74599137c75fd7a3e917dc72abc21df))
+
+- **deps:** lock file maintenance (#127)([`d2b70f6`](https://github.com/kondanta/shepherd/commit/d2b70f6c186f9d4a4b4fccfa5e662488cc7cfbc1))
+
+- **deps:** update docker:cli docker digest to 206ae9c (#126)([`b306dc0`](https://github.com/kondanta/shepherd/commit/b306dc041e6dd71e57047fe8963e60978273253c))
+
+- **deps:** update rust crate clap to v4.6.5 (#125)([`e0c3d55`](https://github.com/kondanta/shepherd/commit/e0c3d552b9db02e0ca39bf6114f0a4c5c244dd92))
+
+- **deps:** update rust crate axum-prometheus to v0.10.1 (#124)([`83797e5`](https://github.com/kondanta/shepherd/commit/83797e58f6b963a65043b6b2cfd7c4de3a50af67))
+
+- **deps:** lock file maintenance (#123)([`256d1a9`](https://github.com/kondanta/shepherd/commit/256d1a9a74f9cb60ec27a71b6cb5719c5fd0288b))
+
+- **deps:** update rust crate clap to v4.6.4 (#122)([`a119075`](https://github.com/kondanta/shepherd/commit/a119075bfc5a0a43cd0d2c9dd86ef064b06a674b))
+
+
 ## [2026.7.2] - 2026-07-20
 
 ### Bug Fixes
