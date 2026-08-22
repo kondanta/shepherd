@@ -3,7 +3,7 @@ use eyre::eyre;
 use serde::Deserialize;
 use std::{future::Future, time::Duration};
 
-pub trait GitHubProvider: Clone + Send + Sync + 'static {
+pub trait ForgeProvider: Clone + Send + Sync + 'static {
     fn fetch_file_content(
         &self,
         owner: &str,
@@ -364,7 +364,7 @@ impl GitHubClient {
     }
 }
 
-impl GitHubProvider for GitHubClient {
+impl ForgeProvider for GitHubClient {
     async fn fetch_file_content(
         &self,
         owner: &str,
@@ -462,7 +462,7 @@ mod fake {
         pub get_commit_files_calls: Arc<Mutex<Vec<String>>>,
     }
 
-    impl GitHubProvider for FakeGitHubClient {
+    impl ForgeProvider for FakeGitHubClient {
         async fn commits_since(
             &self,
             _owner: &str,

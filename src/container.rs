@@ -4,7 +4,7 @@ pub mod image;
 pub mod webhook;
 
 use docker::{DockerClient, DockerExecutor};
-use github::{GitHubClient, GitHubProvider};
+use github::{ForgeProvider, GitHubClient};
 use image::ImageReference;
 
 use crate::config::Config;
@@ -61,7 +61,7 @@ pub struct Deployment {
 /// the HTTP response is immediate, but the actual deploy work is queued.
 pub struct DeploymentOrchestrator<
     D: DockerExecutor = DockerClient,
-    G: GitHubProvider = GitHubClient,
+    G: ForgeProvider = GitHubClient,
 > {
     docker_client: D,
     github_client: Arc<G>,
@@ -75,15 +75,7 @@ pub struct DeploymentOrchestrator<
     deploy_semaphore: tokio::sync::Semaphore,
 }
 
-impl DeploymentOrchestrator<DockerClient> {
-    pub async fn new(config: Arc<Config>, flags: SharedFlags) -> Result<Self> {
-        let github_client = Arc::new(GitHubClient::new(config.github_token.clone()));
-        Self::with_executor(config, github_client, flags, DockerClient::new().await?)
-            .await
-    }
-}
-
-impl<D: DockerExecutor, G: GitHubProvider> DeploymentOrchestrator<D, G> {
+impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
     pub async fn with_executor(
         config: Arc<Config>,
         github_client: Arc<G>,
@@ -98,10 +90,6 @@ impl<D: DockerExecutor, G: GitHubProvider> DeploymentOrchestrator<D, G> {
             history: Mutex::new(VecDeque::new()),
             deploy_semaphore: tokio::sync::Semaphore::new(1),
         })
-    }
-
-    pub fn github_client(&self) -> Arc<G> {
-        Arc::clone(&self.github_client)
     }
 
     pub async fn check_available(&self) -> bool {

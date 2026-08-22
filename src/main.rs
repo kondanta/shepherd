@@ -11,7 +11,9 @@ mod poller;
 mod routes;
 mod tracing_setup;
 
-use container::DeploymentOrchestrator;
+use container::{
+    DeploymentOrchestrator, docker::DockerClient, github::GitHubClient,
+};
 use routes::AppState;
 
 #[derive(Parser)]
@@ -65,13 +67,25 @@ async fn serve(
 
     let flags = features::new_flags();
 
-    let orchestrator =
-        DeploymentOrchestrator::new(Arc::clone(&config), flags.clone())
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to initialize orchestrator: {e}");
-                std::process::exit(1);
-            });
+    // New logic
+    let github = Arc::new(GitHubClient::new(config.github_token.clone()));
+
+    let docker = DockerClient::new().await.unwrap_or_else(|e| {
+        eprint!("Failed to init Docker client: {e}");
+        std::process::exit(1);
+    });
+
+    let orchestrator = DeploymentOrchestrator::with_executor(
+        Arc::clone(&config),
+        Arc::clone(&github),
+        flags.clone(),
+        docker,
+    )
+    .await
+    .unwrap_or_else(|e| {
+        eprintln!("Failed to init orchestrator: {e}");
+        std::process::exit(1);
+    });
 
     let state = AppState { config, orchestrator: Arc::new(orchestrator), flags };
 
@@ -79,7 +93,7 @@ async fn serve(
         config::Mode::Poll { repo, interval_secs, .. } => {
             let p = poller::Poller::new(
                 Arc::clone(&state.orchestrator),
-                state.orchestrator.github_client(),
+                Arc::clone(&github),
                 state.flags.clone(),
                 Arc::clone(&state.config),
             );

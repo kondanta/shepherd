@@ -1,7 +1,7 @@
 use axum::{
     Json,
     body::Bytes,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, FromRef, State},
     http::{HeaderMap, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -19,7 +19,7 @@ use crate::container::{
 };
 use crate::{
     config::Config,
-    container::github::{GitHubClient, GitHubProvider},
+    container::github::{ForgeProvider, GitHubClient},
 };
 
 use crate::features::SharedFlags;
@@ -33,16 +33,28 @@ use axum_tracing_opentelemetry::middleware::{OtelAxumLayer, OtelInResponseLayer}
 #[derive(Clone)]
 pub struct AppState<
     D: DockerExecutor = DockerClient,
-    G: GitHubProvider = GitHubClient,
+    G: ForgeProvider = GitHubClient,
 > {
     pub config: Arc<Config>,
     pub orchestrator: Arc<DeploymentOrchestrator<D, G>>,
     pub flags: SharedFlags,
 }
 
+impl<D: DockerExecutor, G: ForgeProvider> FromRef<AppState<D, G>> for SharedFlags {
+    fn from_ref(input: &AppState<D, G>) -> Self {
+        Arc::clone(&input.flags)
+    }
+}
+
+impl<D: DockerExecutor, G: ForgeProvider> FromRef<AppState<D, G>> for Arc<Config> {
+    fn from_ref(input: &AppState<D, G>) -> Self {
+        Arc::clone(&input.config)
+    }
+}
+
 /// Build the complete router. This is the single place that owns all route
 /// definitions and their middleware — `main` just binds and serves.
-pub fn router<D: DockerExecutor, G: GitHubProvider>(
+pub fn router<D: DockerExecutor, G: ForgeProvider>(
     state: AppState<D, G>,
 ) -> axum::Router {
     if state.config.api_token.is_none() {
@@ -60,7 +72,7 @@ pub fn router<D: DockerExecutor, G: GitHubProvider>(
         .route("/flags/dry-run/enable", post(enable_dry_run))
         .route("/flags/dry-run/disable", post(disable_dry_run))
         .route_layer(middleware::from_fn_with_state(
-            state.clone(),
+            Arc::clone(&state.config),
             require_api_token,
         ));
 
@@ -116,12 +128,12 @@ fn unauthorized(reason: &str) -> Response {
         .into_response()
 }
 
-pub async fn require_api_token<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
+pub async fn require_api_token(
+    State(config): State<Arc<Config>>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let Some(expected) = &state.config.api_token else {
+    let Some(expected) = &config.api_token else {
         return unauthorized("API_TOKEN is not configured on this instance");
     };
 
@@ -191,10 +203,10 @@ pub(crate) struct ReadyChecks {
 ///
 /// Answers "should k8s restart this pod?". Checks only that ROOT_DIR is
 /// accessible. Intentionally lightweight: no subprocess, no network calls.
-pub(crate) async fn health_check<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
+pub(crate) async fn health_check(
+    State(config): State<Arc<Config>>,
 ) -> (StatusCode, Json<HealthResponse>) {
-    let root_dir = &state.config.root_dir;
+    let root_dir = &config.root_dir;
     match tokio::fs::metadata(root_dir).await {
         Ok(m) if m.is_dir() => {
             (StatusCode::OK, Json(HealthResponse { status: "ok", reason: None }))
@@ -219,7 +231,7 @@ pub(crate) async fn health_check<D: DockerExecutor, G: GitHubProvider>(
 /// Answers "should k8s send traffic to this pod?". Runs both checks
 /// independently so the response always shows per-check detail regardless
 /// of which one fails.
-pub(crate) async fn readiness_check<D: DockerExecutor, G: GitHubProvider>(
+pub(crate) async fn readiness_check<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> (StatusCode, Json<ReadyResponse>) {
     let (root_dir_result, docker_ok) = tokio::join!(
@@ -269,7 +281,7 @@ pub struct ManagedServicesResponse {
     pub total: usize,
 }
 
-pub async fn list_managed_services<D: DockerExecutor, G: GitHubProvider>(
+pub async fn list_managed_services<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> Result<Json<ManagedServicesResponse>, StatusCode> {
     let services = state.orchestrator.get_managed_services().await.map_err(|e| {
@@ -280,7 +292,7 @@ pub async fn list_managed_services<D: DockerExecutor, G: GitHubProvider>(
     Ok(Json(ManagedServicesResponse { services, total }))
 }
 
-async fn github_webhook<D: DockerExecutor, G: GitHubProvider>(
+async fn github_webhook<D: DockerExecutor, G: ForgeProvider>(
     state: AppState<D, G>,
     headers: HeaderMap,
     body: Bytes,
@@ -346,7 +358,7 @@ async fn github_webhook<D: DockerExecutor, G: GitHubProvider>(
     StatusCode::ACCEPTED
 }
 
-pub async fn list_deployments<D: DockerExecutor, G: GitHubProvider>(
+pub async fn list_deployments<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> Json<Vec<Deployment>> {
     Json(state.orchestrator.list_deployments())
@@ -361,7 +373,7 @@ pub struct ManualDeployRequest {
     pub image: Option<String>,
 }
 
-pub async fn manual_deploy<D: DockerExecutor, G: GitHubProvider>(
+pub async fn manual_deploy<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
     Json(req): Json<ManualDeployRequest>,
 ) -> StatusCode {
@@ -395,7 +407,7 @@ pub async fn manual_deploy<D: DockerExecutor, G: GitHubProvider>(
     StatusCode::ACCEPTED
 }
 
-pub async fn trigger_sync<D: DockerExecutor, G: GitHubProvider>(
+pub async fn trigger_sync<D: DockerExecutor, G: ForgeProvider>(
     State(state): State<AppState<D, G>>,
 ) -> StatusCode {
     if state.flags.load().deployments_paused {
@@ -419,20 +431,16 @@ pub struct FlagsResponse {
     pub dry_run: bool,
 }
 
-pub async fn get_flags<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
-) -> Json<FlagsResponse> {
-    let f = state.flags.load();
+pub async fn get_flags(State(flags): State<SharedFlags>) -> Json<FlagsResponse> {
+    let f = flags.load();
     Json(FlagsResponse {
         deployments_paused: f.deployments_paused,
         dry_run: f.dry_run,
     })
 }
 
-pub async fn pause_deployments<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
-) -> StatusCode {
-    state.flags.rcu(|f| crate::features::RuntimeFlags {
+pub async fn pause_deployments(State(flags): State<SharedFlags>) -> StatusCode {
+    flags.rcu(|f| crate::features::RuntimeFlags {
         deployments_paused: true,
         ..(**f).clone()
     });
@@ -441,10 +449,8 @@ pub async fn pause_deployments<D: DockerExecutor, G: GitHubProvider>(
     StatusCode::OK
 }
 
-pub async fn resume_deployments<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
-) -> StatusCode {
-    state.flags.rcu(|f| crate::features::RuntimeFlags {
+pub async fn resume_deployments(State(flags): State<SharedFlags>) -> StatusCode {
+    flags.rcu(|f| crate::features::RuntimeFlags {
         deployments_paused: false,
         ..(**f).clone()
     });
@@ -453,23 +459,15 @@ pub async fn resume_deployments<D: DockerExecutor, G: GitHubProvider>(
     StatusCode::OK
 }
 
-pub async fn enable_dry_run<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
-) -> StatusCode {
-    state
-        .flags
-        .rcu(|f| crate::features::RuntimeFlags { dry_run: true, ..(**f).clone() });
+pub async fn enable_dry_run(State(flags): State<SharedFlags>) -> StatusCode {
+    flags.rcu(|f| crate::features::RuntimeFlags { dry_run: true, ..(**f).clone() });
     crate::metrics::set_dry_run(true);
     tracing::info!("Dry-run mode enabled");
     StatusCode::OK
 }
 
-pub async fn disable_dry_run<D: DockerExecutor, G: GitHubProvider>(
-    State(state): State<AppState<D, G>>,
-) -> StatusCode {
-    state
-        .flags
-        .rcu(|f| crate::features::RuntimeFlags { dry_run: false, ..(**f).clone() });
+pub async fn disable_dry_run(State(flags): State<SharedFlags>) -> StatusCode {
+    flags.rcu(|f| crate::features::RuntimeFlags { dry_run: false, ..(**f).clone() });
     crate::metrics::set_dry_run(false);
     tracing::info!("Dry-run mode disabled");
     StatusCode::OK
@@ -535,10 +533,6 @@ mod tests {
     // ── require_api_token ─────────────────────────────────────────────────────
 
     /// Build a minimal AppState for middleware tests.
-    ///
-    /// Requires docker to be installed (DeploymentOrchestrator::new calls
-    /// `docker compose version` on startup). Tests are not marked #[ignore]
-    /// because docker is available in this project's CI environment.
     async fn test_state(
         api_token: Option<&str>,
     ) -> AppState<crate::container::docker::CapturingDockerExecutor> {
@@ -561,22 +555,20 @@ mod tests {
         AppState { config, orchestrator: Arc::new(orchestrator), flags }
     }
 
-    fn token_test_app<D: DockerExecutor, G: GitHubProvider>(
-        state: AppState<D, G>,
-    ) -> axum::Router {
+    fn token_test_app(config: Arc<Config>) -> axum::Router {
         axum::Router::new()
             .route("/", get(|| async { StatusCode::OK }))
             .route_layer(axum::middleware::from_fn_with_state(
-                state.clone(),
+                Arc::clone(&config),
                 require_api_token,
             ))
-            .with_state(state)
+            .with_state(config)
     }
 
     #[tokio::test]
     async fn valid_token_passes_middleware() {
         let state = test_state(Some("correct-token")).await;
-        let app = token_test_app(state);
+        let app = token_test_app(state.config.clone());
         let req = Request::builder()
             .uri("/")
             .header("Authorization", "Bearer correct-token")
@@ -589,7 +581,7 @@ mod tests {
     #[tokio::test]
     async fn wrong_token_returns_401() {
         let state = test_state(Some("correct-token")).await;
-        let app = token_test_app(state);
+        let app = token_test_app(state.config.clone());
         let req = Request::builder()
             .uri("/")
             .header("Authorization", "Bearer wrong-token")
@@ -602,7 +594,7 @@ mod tests {
     #[tokio::test]
     async fn missing_auth_header_returns_401() {
         let state = test_state(Some("correct-token")).await;
-        let app = token_test_app(state);
+        let app = token_test_app(state.config.clone());
         let req = Request::builder().uri("/").body(Body::empty()).unwrap();
         let res = app.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
@@ -611,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn no_api_token_configured_returns_401() {
         let state = test_state(None).await;
-        let app = token_test_app(state);
+        let app = token_test_app(state.config.clone());
         let req = Request::builder()
             .uri("/")
             .header("Authorization", "Bearer anything")
