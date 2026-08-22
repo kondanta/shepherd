@@ -1,7 +1,38 @@
 use color_eyre::Result;
 use eyre::eyre;
 use serde::Deserialize;
-use std::time::Duration;
+use std::{future::Future, time::Duration};
+
+pub trait GitHubProvider: Clone + Send + Sync + 'static {
+    fn fetch_file_content(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        sha: &str,
+    ) -> impl Future<Output = Result<String>> + Send;
+    fn commits_since(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        since_sha: Option<&str>,
+    ) -> impl Future<Output = Result<(String, Vec<PollCommit>)>> + Send;
+
+    fn get_commit_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> impl Future<Output = Result<Vec<String>>> + Send;
+
+    fn list_repo_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> impl Future<Output = Result<Vec<String>>> + Send;
+}
 
 /// A commit returned by the polling API.
 pub struct PollCommit {
@@ -61,6 +92,7 @@ struct ApiTreeEntry {
     entry_type: String,
 }
 
+#[derive(Clone)]
 pub struct GitHubClient {
     client: reqwest::Client,
     token: Option<String>,
@@ -332,6 +364,46 @@ impl GitHubClient {
     }
 }
 
+impl GitHubProvider for GitHubClient {
+    async fn fetch_file_content(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        sha: &str,
+    ) -> Result<String> {
+        self.fetch_file_content(owner, repo, path, sha).await
+    }
+
+    async fn commits_since(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+        since_sha: Option<&str>,
+    ) -> Result<(String, Vec<PollCommit>)> {
+        self.commits_since(owner, repo, branch, since_sha).await
+    }
+
+    async fn get_commit_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> Result<Vec<String>> {
+        self.get_commit_files(owner, repo, sha).await
+    }
+
+    async fn list_repo_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        sha: &str,
+    ) -> Result<Vec<String>> {
+        self.list_repo_files(owner, repo, sha).await
+    }
+}
+
 // ── input validation (CWE-22/23/36/99) ───────────────────────────────────────
 
 /// SHA must be 40 or 64 lowercase hex chars (SHA-1 / SHA-256).
@@ -367,6 +439,84 @@ fn validate_branch(branch: &str) -> Result<()> {
         || branch.contains("..")
         || branch.chars().any(|c| matches!(c, '?' | '&' | '#' | '\0'));
     if invalid { Err(eyre!("Invalid branch name: {branch:?}")) } else { Ok(()) }
+}
+
+#[cfg(test)]
+pub use fake::FakeGitHubClient;
+
+#[cfg(test)]
+mod fake {
+    use super::*;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, Mutex};
+
+    // By itself, it is too complex-- hence created a new type
+    type CommitsQueue = Arc<Mutex<VecDeque<(String, Vec<PollCommit>)>>>;
+
+    #[derive(Clone, Default)]
+    pub struct FakeGitHubClient {
+        pub commits_queue: CommitsQueue,
+        pub commit_files: Arc<Mutex<HashMap<String, Vec<String>>>>,
+        pub repo_files: Arc<Mutex<Vec<String>>>,
+        pub file_content: Arc<Mutex<HashMap<String, String>>>,
+    }
+
+    impl GitHubProvider for FakeGitHubClient {
+        async fn commits_since(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _branch: &str,
+            _since_sha: Option<&str>,
+        ) -> Result<(String, Vec<PollCommit>)> {
+            Ok(self
+                .commits_queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| ("a".repeat(40), vec![])))
+        }
+
+        async fn get_commit_files(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            sha: &str,
+        ) -> Result<Vec<String>> {
+            Ok(self
+                .commit_files
+                .lock()
+                .unwrap()
+                .get(sha)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        async fn list_repo_files(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _sha: &str,
+        ) -> Result<Vec<String>> {
+            Ok(self.repo_files.lock().unwrap().clone())
+        }
+
+        async fn fetch_file_content(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            path: &str,
+            _sha: &str,
+        ) -> Result<String> {
+            Ok(self
+                .file_content
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .unwrap_or_default())
+        }
+    }
 }
 
 #[cfg(test)]
