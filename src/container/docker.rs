@@ -167,8 +167,7 @@ impl DockerClient {
 
 impl DockerExecutor for DockerClient {
     async fn pull_image(&self, image: &str) -> Result<()> {
-        let image = image.to_owned();
-        self.pull_image(&image).await
+        self.pull_image(image).await
     }
 
     async fn restart_compose_service(
@@ -176,9 +175,7 @@ impl DockerExecutor for DockerClient {
         compose_file: &Path,
         service_name: &str,
     ) -> Result<()> {
-        let path = compose_file.to_owned();
-        let name = service_name.to_owned();
-        self.restart_compose_service(&path, &name).await
+        self.restart_compose_service(compose_file, service_name).await
     }
 
     async fn compose_up_service(
@@ -186,9 +183,7 @@ impl DockerExecutor for DockerClient {
         compose_file: &Path,
         service_name: &str,
     ) -> Result<()> {
-        let path = compose_file.to_owned();
-        let name = service_name.to_owned();
-        self.compose_up_service(&path, &name).await
+        self.compose_up_service(compose_file, service_name).await
     }
 
     async fn check_available(&self) -> bool {
