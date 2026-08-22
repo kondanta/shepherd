@@ -897,8 +897,8 @@ mod tests {
 
         assert!(!service_names.is_empty(), "expected deploy calls");
         assert_eq!(
-            service_names.last().copied(),
-            Some("shepherd"),
+            service_names,
+            vec!["app", "shepherd"],
             "shepherd must deploy last; got order: {:?}",
             service_names
         );
