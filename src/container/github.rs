@@ -459,6 +459,7 @@ mod fake {
         pub commit_files: Arc<Mutex<HashMap<String, Vec<String>>>>,
         pub repo_files: Arc<Mutex<Vec<String>>>,
         pub file_content: Arc<Mutex<HashMap<String, String>>>,
+        pub get_commit_files_calls: Arc<Mutex<Vec<String>>>,
     }
 
     impl GitHubProvider for FakeGitHubClient {
@@ -483,6 +484,7 @@ mod fake {
             _repo: &str,
             sha: &str,
         ) -> Result<Vec<String>> {
+            self.get_commit_files_calls.lock().unwrap().push(sha.to_string());
             Ok(self
                 .commit_files
                 .lock()

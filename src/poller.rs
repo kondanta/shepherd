@@ -190,6 +190,8 @@ impl<D: DockerExecutor, G: GitHubProvider> Poller<D, G> {
 
 #[cfg(test)]
 mod test {
+    use tempfile::TempDir;
+
     use super::*;
     use crate::{
         config::{self, Config},
@@ -216,11 +218,16 @@ mod test {
         Poller<CapturingDockerExecutor, FakeGitHubClient>,
         Arc<FakeGitHubClient>,
         Arc<Mutex<Vec<crate::container::docker::DockerCall>>>,
+        TempDir,
     ) {
-        let config = Arc::new(poll_config());
         let github = Arc::new(FakeGitHubClient::default());
         let executor = CapturingDockerExecutor::default();
         let calls = executor.calls.clone();
+        let tmp = TempDir::new().unwrap();
+        let config = Arc::new(Config {
+            root_dir: tmp.path().to_string_lossy().into_owned(),
+            ..poll_config()
+        });
         let orchestrator = Arc::new(
             DeploymentOrchestrator::with_executor(
                 Arc::clone(&config),
@@ -239,21 +246,29 @@ mod test {
             Arc::clone(&config),
         );
 
-        (poller, github, calls)
+        (poller, github, calls, tmp)
     }
 
     #[tokio::test]
     async fn poll_once_no_commit_is_noop() {
-        let (poller, _github, _calls) = fake_poller().await;
+        let (poller, github, _calls, _tmp) = fake_poller().await;
 
-        // Commit queue is empty("a"*40, [])
-        // Nothing to process
+        // First poll: establishes last_sha via sync_from_head
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
+        poller.poll_once().await.unwrap();
+
+        // Second poll: no new commits — exercises the actual noop path
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
         poller.poll_once().await.unwrap();
     }
 
     #[tokio::test]
     async fn poll_once_non_renovate_commit_is_ignored() {
-        let (poller, github, _calls) = fake_poller().await;
+        let (poller, github, _calls, _tmp) = fake_poller().await;
+
+        // Establish last_sha first so the next poll takes the commit processing path
+        github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
+        poller.poll_once().await.unwrap();
 
         github.commits_queue.lock().unwrap().push_back((
             "b".repeat(40),
@@ -267,14 +282,17 @@ mod test {
 
         poller.poll_once().await.unwrap();
 
-        // No compose files, nothing to process
-        assert!(github.commit_files.lock().unwrap().is_empty())
+        assert!(
+            github.get_commit_files_calls.lock().unwrap().is_empty(),
+            "get_commit_files should not be called for non-Renovate commits"
+        );
     }
 
     #[tokio::test]
     async fn poll_once_renovate_commit_triggers_deploy() {
-        let (poller, github, calls) = fake_poller().await;
+        let (poller, github, calls, _tmp) = fake_poller().await;
         let commit_sha = "d".repeat(40);
+        let yaml_content = "services:\n  nginx:\n    # web server\n    image: nginx:1.24\n    ports:\n      - '80:80'\n";
 
         // We need to init last_sha via sync_from_head
         github.commits_queue.lock().unwrap().push_back(("a".repeat(40), vec![]));
@@ -295,10 +313,11 @@ mod test {
             .lock()
             .unwrap()
             .insert(commit_sha.clone(), vec!["docker-compose.yaml".to_string()]);
-        github.file_content.lock().unwrap().insert(
-            "docker-compose.yaml".to_string(),
-            "services:\n    web:\n       image: nginx:1.25.0\n".to_string(),
-        );
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("docker-compose.yaml".to_string(), yaml_content.to_string());
 
         poller.poll_once().await.unwrap();
 
