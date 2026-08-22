@@ -657,7 +657,11 @@ fn duration_secs(d: Duration) -> f64 {
 mod tests {
     use super::*;
     use crate::{
-        container::{docker::DockerExecutor, github::FakeGitHubClient},
+        container::{
+            docker::{CapturingDockerExecutor, DockerCall, DockerExecutor},
+            github::FakeGitHubClient,
+        },
+        features,
         fs::walk::ServiceEntry,
     };
     use std::path::PathBuf;
@@ -710,6 +714,32 @@ mod tests {
         )
         .await
         .expect("DeploymentOrchestrator::with_executor failed")
+    }
+
+    async fn webhook_orchestrator() -> (
+        DeploymentOrchestrator<CapturingDockerExecutor, FakeGitHubClient>,
+        Arc<FakeGitHubClient>,
+        Arc<std::sync::Mutex<Vec<DockerCall>>>,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let github = Arc::new(FakeGitHubClient::default());
+        let executor = CapturingDockerExecutor::new();
+        let calls = executor.calls.clone();
+        let config = Arc::new(Config {
+            root_dir: tmp.path().to_string_lossy().into_owned(),
+            ..Config::for_test(None)
+        });
+        let orchestrator = DeploymentOrchestrator::with_executor(
+            Arc::clone(&config),
+            Arc::clone(&github),
+            features::new_flags(),
+            executor,
+        )
+        .await
+        .unwrap();
+
+        (orchestrator, github, calls, tmp)
     }
 
     fn push_payload(
@@ -781,6 +811,97 @@ mod tests {
             vec![renovate_commit(vec!["README.md", ".renovaterc.json"])],
         );
         assert!(orch.handle_webhook(&payload).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn handle_webhook_deduplicates_services_across_compose_files() {
+        let (orchestrator, github, calls, _tmp) = webhook_orchestrator().await;
+        let yaml = "services:\n  nginx:\n    image: nginx:1.25\n";
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("a/compose.yaml".to_string(), yaml.to_string());
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("b/compose.yaml".to_string(), yaml.to_string());
+
+        let payload = push_payload(
+            "refs/heads/main",
+            "main",
+            vec![renovate_commit(vec!["a/compose.yaml", "b/compose.yaml"])],
+        );
+        orchestrator.handle_webhook(&payload).await.unwrap();
+
+        let recorded = calls.lock().unwrap();
+        let nginx_deploys = recorded
+            .iter()
+            .filter(|c| match c {
+                DockerCall::RestartService { service, .. }
+                | DockerCall::ComposeUp { service, .. } => service == "nginx",
+                _ => false,
+            })
+            .count();
+
+        assert_eq!(
+            nginx_deploys, 1,
+            "nginx should be deployed exactly once despite appearing in two compose files"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_webhook_deploys_shepherd_service_last() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let github = Arc::new(FakeGitHubClient::default());
+        let executor = CapturingDockerExecutor::new();
+        let calls = executor.calls.clone();
+        let config = Arc::new(crate::config::Config {
+            root_dir: tmp.path().to_string_lossy().into_owned(),
+            shepherd_service_name: Some("shepherd".to_string()),
+            ..crate::config::Config::for_test(None)
+        });
+        let orch = DeploymentOrchestrator::with_executor(
+            Arc::clone(&config),
+            Arc::clone(&github),
+            features::new_flags(),
+            executor,
+        )
+        .await
+        .unwrap();
+
+        let yaml = "services:\n  app:\n    image: myapp:1.0\n  shepherd:\n    image: shepherd:2.0\n";
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("compose.yaml".to_string(), yaml.to_string());
+
+        let payload = push_payload(
+            "refs/heads/main",
+            "main",
+            vec![renovate_commit(vec!["compose.yaml"])],
+        );
+        orch.handle_webhook(&payload).await.unwrap();
+
+        let recorded = calls.lock().unwrap();
+        let service_names: Vec<&str> = recorded
+            .iter()
+            .filter_map(|c| match c {
+                DockerCall::RestartService { service, .. }
+                | DockerCall::ComposeUp { service, .. } => Some(service.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(!service_names.is_empty(), "expected deploy calls");
+        assert_eq!(
+            service_names,
+            vec!["app", "shepherd"],
+            "shepherd must deploy last; got order: {:?}",
+            service_names
+        );
     }
 
     fn make_service(name: &str, image: &str, raw_yaml: &str) -> ServiceEntry {
