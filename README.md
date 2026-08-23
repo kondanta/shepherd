@@ -46,7 +46,7 @@ All configuration is via environment variables. A `.env` file is loaded if prese
 | `SERVICE_FILTER` | no | — | Comma-separated names of services this instance may deploy — these are the keys under `services:` in the compose file, not folder names; unset means all |
 | `ALLOW_LATEST_IMAGES` | no | `false` | Allow services tagged `latest` to be deployed |
 | `INITIAL_SYNC` | no | `true` | On startup, pull and apply all services using idempotent `docker compose up -d --no-deps`. Catches any drift that accumulated while Shepherd was down. Set to `false` to disable. |
-| `SHEPHERD_SERVICE_NAME` | no | — | The compose service name Shepherd itself runs as. When set, Shepherd always deploys itself last in any batch so sibling services are updated before it replaces its own container. Set this to match the service key under `services:` in your compose file (e.g. `shepherd`). |
+| `SHEPHERD_SERVICE_NAME` | no | — | The compose service name Shepherd itself runs as. When set, Shepherd deploys itself last in any batch and uses a short-lived `shepherd-updater` container to perform its own update — this avoids a race where Shepherd would be killed before it could start its own replacement. Must match the service key under `services:` exactly (e.g. `shepherd`). |
 | `API_TOKEN` | no | — | Bearer token required for `/flags/*` and `/sync` endpoints |
 | `LOG_LEVEL` | no | `info` | One of `trace`, `debug`, `info`, `warn`, `error` |
 | `OTLP_ENDPOINT` | no | — | gRPC endpoint for traces; required with `--features otlp` |
@@ -70,7 +70,18 @@ services:
     environment:
       ROOT_DIR: /srv/compose
       WEBHOOK_SECRET: your-secret
+      SHEPHERD_SERVICE_NAME: shepherd
 ```
+
+### Self-updating
+
+When `SHEPHERD_SERVICE_NAME` is set, Shepherd handles its own container replacement differently. Updating itself through the normal `docker compose up` path would fail: Docker Compose stops the running container before starting the replacement, and since Shepherd is PID 1 in its container, it is killed before the start command can run — leaving the new container stuck in `Created` state.
+
+Instead, Shepherd spawns a separate `shepherd-updater` container (using its own image, which includes the Docker CLI) to run `docker compose up --force-recreate` from outside its own container namespace. The updater survives Shepherd's shutdown and completes the transition.
+
+The `shepherd-updater` container name is reserved — do not use it for any other service.
+
+On startup, Shepherd removes any leftover `shepherd-updater` container before performing the initial sync, recovering cleanly from a previous interrupted update.
 
 See `docker-compose.example.yml` for a complete example.
 

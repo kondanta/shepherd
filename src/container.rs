@@ -193,6 +193,13 @@ impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
     #[tracing::instrument(skip(self))]
     pub async fn initial_sync(&self) -> Result<()> {
         tracing::info!("Starting initial sync");
+
+        if !self.flags.load().dry_run
+            && let Err(e) = self.docker_client.cleanup_updater_container().await
+        {
+            tracing::warn!("Failed to remove shepherd-updater container: {e:?}");
+        }
+
         let services = self.get_managed_services().await?;
         let mut queued = 0u32;
         for service in services {
@@ -344,16 +351,51 @@ impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
         }
 
         for service in to_restart {
-            if self
+            let is_self = self
                 .config
                 .shepherd_service_name
                 .as_deref()
-                .is_some_and(|n| n.eq_ignore_ascii_case(&service.name))
-            {
+                .is_some_and(|n| n.eq_ignore_ascii_case(&service.name));
+
+            if is_self {
                 tracing::info!(
                     service = %service.name,
-                    "Deploying self — process will exit after docker compose up returns"
+                    "Self-update detected. Spawning updater container"
                 );
+                if self.flags.load().dry_run {
+                    tracing::info!(
+                        service = %service.name,
+                        "[dry-run] would spawn shepherd-updater container"
+                    );
+                } else {
+                    match self
+                        .docker_client
+                        .spawn_self_updater(
+                            &service.path,
+                            &service.name,
+                            &self.config.root_dir,
+                            &service.image,
+                        )
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(e) if e.to_string().contains("name already in use") => {
+                            tracing::info!(
+                                service = %service.name,
+                                "Updater container is already running - a concurrent self-update is in progress \
+                                If a newer image was pushed concurrently, the next poll cycle will detect \
+                                the drift and redeploy. If shepherd is in webhook mode and a newer image is pushed \
+                                concurrently, that version may not be picked up automatically."
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to spawn self-updater {e:?}");
+                        }
+                    }
+                }
+
+                // We don't want standard updater to race with updater child process.
+                continue;
             }
             if let Err(e) =
                 self.execute_and_record(&service, DeployMode::ForceRecreate).await
@@ -681,6 +723,20 @@ mod tests {
         async fn check_available(&self) -> bool {
             false
         }
+
+        async fn spawn_self_updater(
+            &self,
+            _compose_file: &Path,
+            _service_name: &str,
+            _root_dir: &str,
+            _image: &str,
+        ) -> Result<()> {
+            Err(eyre::eyre!("docker spawn_self_updater failed"))
+        }
+
+        async fn cleanup_updater_container(&self) -> Result<()> {
+            Err(eyre::eyre!("docker cleanup_updater_container failed"))
+        }
     }
 
     async fn fake_orchestrator() -> DeploymentOrchestrator<
@@ -879,6 +935,7 @@ mod tests {
             .filter_map(|c| match c {
                 DockerCall::RestartService { service, .. }
                 | DockerCall::ComposeUp { service, .. } => Some(service.as_str()),
+                DockerCall::SpawnSelfUpdater { service } => Some(service.as_str()),
                 _ => None,
             })
             .collect();
@@ -889,6 +946,116 @@ mod tests {
             vec!["app", "shepherd"],
             "shepherd must deploy last; got order: {:?}",
             service_names
+        );
+    }
+
+    #[tokio::test]
+    async fn initial_sync_calls_cleanup_updater_on_startup() {
+        let orchestrator = fake_orchestrator().await;
+        orchestrator.initial_sync().await.unwrap();
+
+        let recorded_calls = orchestrator.docker_client.calls();
+
+        assert!(
+            recorded_calls.iter().any(|c| matches!(c, DockerCall::CleanupUpdater)),
+            "initial sync msut call cleanup_updater_container on startup"
+        );
+
+        assert!(
+            matches!(recorded_calls.first(), Some(DockerCall::CleanupUpdater)),
+            "CleanupUpdater must be the first docker call in the initial_sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_push_shepherd_uses_normal_deploy_when_service_name_not_configured()
+     {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let github = Arc::new(FakeGitHubClient::default());
+        let executor = CapturingDockerExecutor::new();
+        let calls = executor.calls.clone();
+        // shepherd_service_name is None — no self-update detection
+        let config = Arc::new(crate::config::Config {
+            root_dir: tmp.path().to_string_lossy().into_owned(),
+            shepherd_service_name: None,
+            ..crate::config::Config::for_test(None)
+        });
+        let orchestrator = DeploymentOrchestrator::with_executor(
+            Arc::clone(&config),
+            Arc::clone(&github),
+            features::new_flags(),
+            executor,
+        )
+        .await
+        .unwrap();
+
+        let yaml = "services:\n  shepherd:\n    image: shepherd:2.0\n";
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("compose.yaml".to_string(), yaml.to_string());
+
+        let payload = push_payload(
+            "refs/heads/main",
+            "main",
+            vec![renovate_commit(vec!["compose.yaml"])],
+        );
+        orchestrator.handle_webhook(&payload).await.unwrap();
+
+        let recorded_calls = calls.lock().unwrap();
+        let has_self_updater = recorded_calls
+            .iter()
+            .any(|c| matches!(c, DockerCall::SpawnSelfUpdater { .. }));
+        let has_restart = recorded_calls
+            .iter()
+            .any(|c| matches!(c, DockerCall::RestartService { .. }));
+
+        assert!(
+            !has_self_updater,
+            "SpawnSelfUpdater must not be called when shepherd_service_name is None"
+        );
+        assert!(
+            has_restart,
+            "shepherd must go through normal RestartService when service name not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_push_self_update_failure_does_not_abort() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let github = Arc::new(FakeGitHubClient::default());
+        let config = Arc::new(crate::config::Config {
+            root_dir: tmp.path().to_string_lossy().into_owned(),
+            shepherd_service_name: Some("shepherd".to_string()),
+            ..crate::config::Config::for_test(None)
+        });
+        let orch = DeploymentOrchestrator::with_executor(
+            Arc::clone(&config),
+            Arc::clone(&github),
+            features::new_flags(),
+            FailingDockerExecutor,
+        )
+        .await
+        .unwrap();
+
+        let yaml = "services:\n  app:\n    image: myapp:1.0\n  shepherd:\n    image: shepherd:2.0\n";
+        github
+            .file_content
+            .lock()
+            .unwrap()
+            .insert("compose.yaml".to_string(), yaml.to_string());
+
+        let payload = push_payload(
+            "refs/heads/main",
+            "main",
+            vec![renovate_commit(vec!["compose.yaml"])],
+        );
+
+        let result = orch.handle_webhook(&payload).await;
+        assert!(
+            result.is_ok(),
+            "process_push must return Ok even when spawn_self_updater fails"
         );
     }
 

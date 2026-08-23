@@ -29,6 +29,16 @@ pub trait DockerExecutor: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<()>> + Send;
 
     fn check_available(&self) -> impl Future<Output = bool> + Send;
+
+    fn spawn_self_updater(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+        root_dir: &str,
+        image: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn cleanup_updater_container(&self) -> impl Future<Output = Result<()>> + Send;
 }
 
 #[derive(Clone)]
@@ -163,6 +173,89 @@ impl DockerClient {
 
         Ok(())
     }
+
+    async fn run_self_updater(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+        root_dir: &str,
+        image: &str,
+    ) -> Result<()> {
+        let compose_path = compose_file.to_string_lossy();
+        let cmd =
+            "exec docker compose -f \"$1\" up -d --force-recreate --no-deps \"$2\"";
+        let root_vol = format!("{root_dir}:{root_dir}");
+
+        let args = vec![
+            "--name",
+            "shepherd-updater",
+            "-v",
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "-v",
+            &root_vol,
+            "--entrypoint",
+            "sh",
+            image,
+            "-c",
+            cmd,
+            "shepherd-updater",
+            &compose_path,
+            service_name,
+        ];
+        let child = TokioCommand::new(&self.docker_bin)
+            .args(["run", "--rm", "-d"])
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .wrap_err("Failed to spawn shepherd-updater container")?;
+
+        let output = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| eyre!("docker run shepherd-updater timed out"))?
+            .wrap_err("Failed to execute docker run for shepherd-updater")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(eyre!(
+                "Failed to start shepherd-updater container: {stderr}"
+            ));
+        }
+
+        Ok(())
+    }
+
+    async fn remove_updater_container(&self) -> Result<()> {
+        let child = TokioCommand::new(&self.docker_bin)
+            .args(["rm", "-f", "shepherd-updater"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .wrap_err("Failed to spawn docker rm for shepherd-updater")?;
+
+        let output = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                eyre!(
+                    "docker rm shepherd-updater timed out after {}s",
+                    DOCKER_COMMAND_TIMEOUT.as_secs()
+                )
+            })?
+            .wrap_err("Failed to execute docker rm for shepherd-updater")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // No container to remove is the expected case on a clean startup.
+            if stderr.contains("No such container") {
+                return Ok(());
+            }
+            return Err(eyre!("docker rm shepherd-updater failed: {stderr}"));
+        }
+
+        Ok(())
+    }
 }
 
 impl DockerExecutor for DockerClient {
@@ -189,6 +282,20 @@ impl DockerExecutor for DockerClient {
     async fn check_available(&self) -> bool {
         Self::verify_compose_available(&self.docker_bin).await.is_ok()
     }
+
+    async fn spawn_self_updater(
+        &self,
+        compose_file: &Path,
+        service_name: &str,
+        root_dir: &str,
+        image: &str,
+    ) -> Result<()> {
+        self.run_self_updater(compose_file, service_name, root_dir, image).await
+    }
+
+    async fn cleanup_updater_container(&self) -> Result<()> {
+        self.remove_updater_container().await
+    }
 }
 
 #[cfg(test)]
@@ -198,6 +305,8 @@ pub enum DockerCall {
     PullImage(String),
     RestartService { path: std::path::PathBuf, service: String },
     ComposeUp { path: std::path::PathBuf, service: String },
+    SpawnSelfUpdater { service: String },
+    CleanupUpdater,
 }
 
 #[cfg(test)]
@@ -253,6 +362,25 @@ impl DockerExecutor for CapturingDockerExecutor {
 
     async fn check_available(&self) -> bool {
         true
+    }
+
+    async fn spawn_self_updater(
+        &self,
+        _compose_file: &Path,
+        service_name: &str,
+        _root_dir: &str,
+        _image: &str,
+    ) -> Result<()> {
+        self.calls.lock().unwrap().push(DockerCall::SpawnSelfUpdater {
+            service: service_name.to_string(),
+        });
+
+        Ok(())
+    }
+
+    async fn cleanup_updater_container(&self) -> Result<()> {
+        self.calls.lock().unwrap().push(DockerCall::CleanupUpdater);
+        Ok(())
     }
 }
 
