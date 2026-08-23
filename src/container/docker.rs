@@ -182,9 +182,8 @@ impl DockerClient {
         image: &str,
     ) -> Result<()> {
         let compose_path = compose_file.to_string_lossy();
-        let cmd = format!(
-            "docker compose -f {compose_path} up -d --force-recreate --no-deps {service_name}"
-        );
+        let cmd =
+            "exec docker compose -f \"$1\" up -d --force-recreate --no-deps \"$2\"";
         let root_vol = format!("{root_dir}:{root_dir}");
 
         let args = vec![
@@ -198,7 +197,10 @@ impl DockerClient {
             "sh",
             image,
             "-c",
-            &cmd,
+            cmd,
+            "shepherd-updater",
+            &compose_path,
+            service_name,
         ];
         let child = TokioCommand::new(&self.docker_bin)
             .args(["run", "--rm", "-d"])
@@ -233,7 +235,7 @@ impl DockerClient {
             .spawn()
             .wrap_err("Failed to spawn docker rm for shepherd-updater")?;
 
-        let _ = child.wait_with_output().await;
+        let _ = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output()).await;
         Ok(())
     }
 }

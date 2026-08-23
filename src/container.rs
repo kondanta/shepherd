@@ -194,7 +194,9 @@ impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
     pub async fn initial_sync(&self) -> Result<()> {
         tracing::info!("Starting initial sync");
 
-        if let Err(e) = self.docker_client.cleanup_updater_container().await {
+        if !self.flags.load().dry_run
+            && let Err(e) = self.docker_client.cleanup_updater_container().await
+        {
             tracing::warn!("Failed to remove shepherd-updater container: {e:?}");
         }
 
@@ -360,18 +362,33 @@ impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
                     service = %service.name,
                     "Self-update detected. Spawning updater container"
                 );
-
-                if let Err(e) = self
-                    .docker_client
-                    .spawn_self_updater(
-                        &service.path,
-                        &service.name,
-                        &self.config.root_dir,
-                        &service.image,
-                    )
-                    .await
-                {
-                    tracing::error!("Failed to spawn self-updater: {e:?}");
+                if self.flags.load().dry_run {
+                    tracing::info!(
+                        service = %service.name,
+                        "[dry-run] would spawn shepherd-updater container"
+                    );
+                } else {
+                    match self
+                        .docker_client
+                        .spawn_self_updater(
+                            &service.path,
+                            &service.name,
+                            &self.config.root_dir,
+                            &service.image,
+                        )
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(e) if e.to_string().contains("name already in use") => {
+                            tracing::info!(
+                                service = %service.name,
+                                "Updater container is already running"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to spawn self-updater {e:?}");
+                        }
+                    }
                 }
 
                 // We don't want standard updater to race with updater child process.
