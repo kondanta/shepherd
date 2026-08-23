@@ -230,22 +230,30 @@ impl DockerClient {
         let child = TokioCommand::new(&self.docker_bin)
             .args(["rm", "-f", "shepherd-updater"])
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
             .wrap_err("Failed to spawn docker rm for shepherd-updater")?;
 
-        // We don't care what timeout returns in this case. We just want to know that
-        // command's timed out
-        #[allow(unused)]
-        timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output()).await.map_err(
-            |_| {
+        let output = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output())
+            .await
+            .map_err(|_| {
                 eyre!(
                     "docker rm shepherd-updater timed out after {}s",
                     DOCKER_COMMAND_TIMEOUT.as_secs()
                 )
-            },
-        )?;
+            })?
+            .wrap_err("Failed to execute docker rm for shepherd-updater")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // No container to remove is the expected case on a clean startup.
+            if stderr.contains("No such container") {
+                return Ok(());
+            }
+            return Err(eyre!("docker rm shepherd-updater failed: {stderr}"));
+        }
+
         Ok(())
     }
 }
