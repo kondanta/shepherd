@@ -382,9 +382,10 @@ impl<D: DockerExecutor, G: ForgeProvider> DeploymentOrchestrator<D, G> {
                         Err(e) if e.to_string().contains("name already in use") => {
                             tracing::info!(
                                 service = %service.name,
-                                "Updater container is already running \
+                                "Updater container is already running - a concurrent self-update is in progress \
                                 If a newer image was pushed concurrently, the next poll cycle will detect \
-                                the drift and redeploy."
+                                the drift and redeploy. If shepherd is in webhook mode and a newer image is pushed \
+                                concurrently, that version may not be picked up automatically."
                             );
                         }
                         Err(e) => {
