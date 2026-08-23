@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026.8.2] - 2026-08-23
+
+### Bug Fixes
+
+- **container:** when shepherd gets updated it causes race (#146)([`c778b61`](https://github.com/kondanta/shepherd/commit/c778b6155608e644e8f6f4d1d5a4f653e8d7663b))
+
+
 ## [2026.8.1] - 2026-08-22
 
 ### Bug Fixes
