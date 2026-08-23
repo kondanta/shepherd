@@ -235,7 +235,17 @@ impl DockerClient {
             .spawn()
             .wrap_err("Failed to spawn docker rm for shepherd-updater")?;
 
-        let _ = timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output()).await;
+        // We don't care what timeout returns in this case. We just want to know that
+        // command's timed out
+        #[allow(unused)]
+        timeout(DOCKER_COMMAND_TIMEOUT, child.wait_with_output()).await.map_err(
+            |_| {
+                eyre!(
+                    "docker rm shepherd-updater timed out after {}s",
+                    DOCKER_COMMAND_TIMEOUT.as_secs()
+                )
+            },
+        )?;
         Ok(())
     }
 }
