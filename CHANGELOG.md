@@ -1,5 +1,21 @@
 # Changelog
 
+## [2026.8.3] - 2026-08-31
+
+### Bug Fixes
+
+- **deps:** update rust crate axum-tracing-opentelemetry to 0.39.0 (#151)([`01f5f1c`](https://github.com/kondanta/shepherd/commit/01f5f1c39288adfd09003833e78dcf965edf70e4))
+
+
+### Miscellaneous Chores
+
+- **deps:** lock file maintenance (#152)([`8500295`](https://github.com/kondanta/shepherd/commit/8500295166cd8404c02e1db91655324d4bd761b6))
+
+- **deps:** update rust crate which to v8.0.6 (#150)([`8f4c1b7`](https://github.com/kondanta/shepherd/commit/8f4c1b7a10e4551d26ec3a0f0bab9cfecf295707))
+
+- **deps:** lock file maintenance (#149)([`25fe469`](https://github.com/kondanta/shepherd/commit/25fe469984ab2092b4d24f4352105cc39f2febdd))
+
+
 ## [2026.8.2] - 2026-08-23
 
 ### Bug Fixes
