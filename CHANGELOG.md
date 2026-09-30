@@ -1,5 +1,12 @@
 # Changelog
 
+## [2026.9.2] - 2026-09-30
+
+### Miscellaneous Chores
+
+- **deps:** update docker/dockerfile:1 docker digest to 4edf897 (#170)([`590ae9b`](https://github.com/kondanta/shepherd/commit/590ae9bbdfc20d5e75a7d2bc35c6a0780480a216))
+
+
 ## [2026.9.1] - 2026-09-27
 
 ### Bug Fixes
