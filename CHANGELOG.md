@@ -1,5 +1,18 @@
 # Changelog
 
+## [2026.10.1] - 2026-10-08
+
+### Miscellaneous Chores
+
+- **deps:** update rust crate tokio to v1.53.2 (#175)([`6e97ebd`](https://github.com/kondanta/shepherd/commit/6e97ebd2ca46bfad819a7d215837ed712a86c596))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to 62e724c (#174)([`f4be607`](https://github.com/kondanta/shepherd/commit/f4be6074b3233aa4cdf46595346ef2eb5fe3c624))
+
+- **deps:** update docker:cli docker digest to b180511 (#172)([`272a3b1`](https://github.com/kondanta/shepherd/commit/272a3b1b84df909b9069f17b75704e9debf43421))
+
+- **deps:** update docker/dockerfile:1 docker digest to 4edf897 (#170)([`590ae9b`](https://github.com/kondanta/shepherd/commit/590ae9bbdfc20d5e75a7d2bc35c6a0780480a216))
+
+
 ## [2026.9.1] - 2026-09-27
 
 ### Bug Fixes
