@@ -12,7 +12,7 @@ eyre = "0.6.14"
 color-eyre = "0.6.5"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tokio = { version = "1.53", features = [
+tokio = { version = "1.54", features = [
     "fs",
     "macros",
     "process",
@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3.23", features = [
     "time",
     "tracing-log",
 ] }
-arc-swap = "1.9.2"
+arc-swap = "1.9.3"
 walkdir = "2.5.0"
 serde_yaml = "0.9.34"
 dotenvy = "0.15.7"
