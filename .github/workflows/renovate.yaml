@@ -23,7 +23,7 @@ env:
 jobs:
   renovate:
     name: Renovate
-    runs-on: i7
+    runs-on: ubuntu-latest
     steps:
       - name: Generate Token
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
