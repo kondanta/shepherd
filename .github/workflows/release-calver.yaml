@@ -42,7 +42,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
@@ -64,7 +64,7 @@ jobs:
           echo "branch=release/${NEXT}" >> "$GITHUB_OUTPUT"
 
       - name: Generate CHANGELOG
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
         with:
           config: cliff.toml
           args: --tag ${{ steps.calver.outputs.version }}
@@ -73,7 +73,7 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Generate PR body
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
         with:
           config: cliff.toml
           args: --tag ${{ steps.calver.outputs.version }} --unreleased --strip all
@@ -82,7 +82,9 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Set up Rust toolchain
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
 
       - name: Bump Cargo.toml version
         env:
@@ -138,7 +140,7 @@ jobs:
           private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
           permission-contents: write
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
@@ -150,7 +152,7 @@ jobs:
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
 
       - name: Generate release notes
-        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
         with:
           config: cliff.toml
           args: --tag ${{ steps.version.outputs.version }} --unreleased --strip all
