@@ -1,5 +1,46 @@
 # Changelog
 
+## [2026.10.1] - 2026-10-31
+
+### Miscellaneous Chores
+
+- update deps (#191)([`fa37237`](https://github.com/kondanta/shepherd/commit/fa37237ebeb62222f18748c8a8ac6d27ecc48496))
+
+- pin version for zizmor (#189)([`a1b2f4b`](https://github.com/kondanta/shepherd/commit/a1b2f4b0e2e9de5ef1878f384b4db872992f3286))
+
+- retire self-hosted runners([`c3c0874`](https://github.com/kondanta/shepherd/commit/c3c0874caa0e0003c4358d55185a9a18ebdf0451))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to 2c27e67 (#188)([`4e53516`](https://github.com/kondanta/shepherd/commit/4e53516d46f09cf75e9e49da499483f5958126cd))
+
+- **deps:** update docker:cli docker digest to 5e6baf6 (#187)([`e99f3f6`](https://github.com/kondanta/shepherd/commit/e99f3f61052bc3add14c351532c407cc043896c9))
+
+- **deps:** lock file maintenance([`02fd349`](https://github.com/kondanta/shepherd/commit/02fd349cda8aa35686bd5ff537e68bd84ef3967e))
+
+- **deps:** update rust crate tokio to v1.54.1 (#181)([`b621e8e`](https://github.com/kondanta/shepherd/commit/b621e8ef341f54650fa75aff5daacb197f18e0ab))
+
+- update dependencies([`a559f6a`](https://github.com/kondanta/shepherd/commit/a559f6a3560f102a2a3f5de65cd5428286d558f5))
+
+- **deps:** update rust crate arc-swap to v1.9.3 (#185)([`c2824a8`](https://github.com/kondanta/shepherd/commit/c2824a84676d0851a384a6d8785311f9a9c059c4))
+
+- **deps:** update docker:cli docker digest to 6fae221 (#184)([`108fd8c`](https://github.com/kondanta/shepherd/commit/108fd8c38722ac065871c2df5504b0861a369045))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to c48fa69 (#183)([`72c823e`](https://github.com/kondanta/shepherd/commit/72c823e7e2691defc692e498f1a5e9decf37602d))
+
+- **deps:** update docker:cli docker digest to 1a4c7cb (#177)([`fae1aa6`](https://github.com/kondanta/shepherd/commit/fae1aa6eb94d13390bd47ac5cb0bd5335bc573da))
+
+- **deps:** lock file maintenance (#176)([`079b465`](https://github.com/kondanta/shepherd/commit/079b4658fd4134972f7061dcc0fbb670cc262068))
+
+- update deps (#182)([`2d787f0`](https://github.com/kondanta/shepherd/commit/2d787f0cd1f5e3e293df5518e094284f5b13c237))
+
+- **deps:** update rust crate tokio to v1.53.2 (#175)([`6e97ebd`](https://github.com/kondanta/shepherd/commit/6e97ebd2ca46bfad819a7d215837ed712a86c596))
+
+- **deps:** update lukemathwalker/cargo-chef:latest-rust-alpine docker digest to 62e724c (#174)([`f4be607`](https://github.com/kondanta/shepherd/commit/f4be6074b3233aa4cdf46595346ef2eb5fe3c624))
+
+- **deps:** update docker:cli docker digest to b180511 (#172)([`272a3b1`](https://github.com/kondanta/shepherd/commit/272a3b1b84df909b9069f17b75704e9debf43421))
+
+- **deps:** update docker/dockerfile:1 docker digest to 4edf897 (#170)([`590ae9b`](https://github.com/kondanta/shepherd/commit/590ae9bbdfc20d5e75a7d2bc35c6a0780480a216))
+
+
 ## [2026.9.1] - 2026-09-27
 
 ### Bug Fixes
